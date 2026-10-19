@@ -1,0 +1,107 @@
+[
+  {
+    "schema_version": "1.0",
+    "event_id": "evt-w01-baseline",
+    "timestamp": "2026-10-18T10:15:00Z",
+    "source": "SIMULATED",
+    "lifecycle_state": "CLEAR",
+    "worker_id": "W01",
+    "location": "Assembly Line 1",
+    "ppe": {
+      "helmet": { "status": "PRESENT", "confidence": 0.96 },
+      "vest": { "status": "PRESENT", "confidence": 0.94 }
+    },
+    "posture": "SAFE",
+    "fall_status": "NONE",
+    "danger_zone": { "entered": false, "zone_id": "ZONE_1", "zone_name": "Assembly Perimeter" },
+    "violations": [],
+    "risk_score": 0,
+    "risk_level": "SAFE",
+    "confidence": 0.95,
+    "details": "Full PPE verified. Safe posture maintained."
+  },
+  {
+    "schema_version": "1.0",
+    "event_id": "evt-w02-missing-helmet",
+    "timestamp": "2026-10-18T10:18:22Z",
+    "source": "SIMULATED",
+    "lifecycle_state": "ACTIVE",
+    "worker_id": "W02",
+    "location": "Machine Zone A",
+    "ppe": {
+      "helmet": { "status": "MISSING", "confidence": 0.92 },
+      "vest": { "status": "PRESENT", "confidence": 0.95 }
+    },
+    "posture": "SAFE",
+    "fall_status": "NONE",
+    "danger_zone": { "entered": false, "zone_id": "ZONE_A", "zone_name": "Machine Zone A" },
+    "violations": ["helmet_missing"],
+    "risk_score": 25,
+    "risk_level": "LOW",
+    "confidence": 0.93,
+    "details": "Missing mandatory safety helmet detected in active machine zone."
+  },
+  {
+    "schema_version": "1.0",
+    "event_id": "evt-w03-danger-zone",
+    "timestamp": "2026-10-18T10:22:45Z",
+    "source": "SIMULATED",
+    "lifecycle_state": "ACTIVE",
+    "worker_id": "W03",
+    "location": "Robotic Cell 4 Perimeter",
+    "ppe": {
+      "helmet": { "status": "PRESENT", "confidence": 0.93 },
+      "vest": { "status": "PRESENT", "confidence": 0.91 }
+    },
+    "posture": "SAFE",
+    "fall_status": "NONE",
+    "danger_zone": { "entered": true, "zone_id": "ROBOT_CELL_4", "zone_name": "Robotic Arm Perimeter" },
+    "violations": ["danger_zone_entry"],
+    "risk_score": 35,
+    "risk_level": "MEDIUM",
+    "confidence": 0.94,
+    "details": "Unauthorized perimeter entry: Worker inside automated robotic cell hazard area."
+  },
+  {
+    "schema_version": "1.0",
+    "event_id": "evt-w04-fall-critical",
+    "timestamp": "2026-10-18T10:35:50Z",
+    "source": "SIMULATED",
+    "lifecycle_state": "ACTIVE",
+    "worker_id": "W04",
+    "location": "Loading Bay Ramp C",
+    "ppe": {
+      "helmet": { "status": "PRESENT", "confidence": 0.90 },
+      "vest": { "status": "PRESENT", "confidence": 0.90 }
+    },
+    "posture": "UNSAFE",
+    "fall_status": "CONFIRMED_FALL",
+    "danger_zone": { "entered": false, "zone_id": "RAMP_C", "zone_name": "Loading Bay" },
+    "violations": ["fall_detected"],
+    "risk_score": 50,
+    "risk_level": "CRITICAL",
+    "confidence": 0.97,
+    "details": "CRITICAL EMERGENCY: Confirmed worker fall detected on loading ramp floor."
+  },
+  {
+    "schema_version": "1.0",
+    "event_id": "evt-w05-multi-hazard",
+    "timestamp": "2026-10-18T10:40:15Z",
+    "source": "SIMULATED",
+    "lifecycle_state": "ACTIVE",
+    "worker_id": "W05",
+    "location": "Warehouse High-Rack 3",
+    "ppe": {
+      "helmet": { "status": "MISSING", "confidence": 0.88 },
+      "vest": { "status": "MISSING", "confidence": 0.90 }
+    },
+    "posture": "UNSAFE",
+    "fall_status": "NONE",
+    "danger_zone": { "entered": false, "zone_id": "RACK_3", "zone_name": "High-Rack 3" },
+    "violations": ["helmet_missing", "vest_missing", "unsafe_posture"],
+    "risk_score": 65,
+    "risk_level": "HIGH",
+    "confidence": 0.91,
+    "details": "Multiple non-compliances: Missing hardhat, missing vest, and acute lumbar bend (>40°)."
+  }
+]

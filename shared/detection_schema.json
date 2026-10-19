@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ErgoGuardSafetyEvent",
+  "description": "Canonical schema for workplace safety events exchanged between AI Module, Safety Engine, and React Dashboard",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "timestamp",
+    "source",
+    "worker_id",
+    "location",
+    "ppe",
+    "posture",
+    "fall_status",
+    "danger_zone",
+    "violations",
+    "risk_score",
+    "risk_level"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0"]
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Unique idempotent event identifier"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 formatted timestamp with explicit timezone"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["LIVE_AI", "VIDEO_AI", "SIMULATED", "TEST_FIXTURE"],
+      "description": "Authoritative origin of the event to ensure truth-in-advertising"
+    },
+    "lifecycle_state": {
+      "type": "string",
+      "enum": ["CLEAR", "DETECTED", "ACTIVE", "RESOLVED", "STALE", "NOT_OBSERVED"],
+      "default": "ACTIVE"
+    },
+    "incident_id": {
+      "type": ["string", "null"],
+      "description": "Stable unique identifier for the active safety incident"
+    },
+    "active_incidents": {
+      "type": "array",
+      "description": "List of active incident records for this worker",
+      "items": {
+        "type": "object"
+      }
+    },
+    "track_state": {
+      "type": "string",
+      "enum": ["OBSERVED", "STALE", "NOT_OBSERVED"],
+      "description": "Observation tracking state of the worker"
+    },
+    "worker_id": {
+      "type": "string",
+      "description": "Tracked worker identifier (e.g. W01, W02)"
+    },
+    "location": {
+      "type": "string",
+      "description": "Monitored facility area"
+    },
+    "ppe": {
+      "type": "object",
+      "required": ["helmet", "vest"],
+      "properties": {
+        "helmet": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["PRESENT", "MISSING", "UNKNOWN", "UNVERIFIED"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "vest": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["PRESENT", "MISSING", "UNKNOWN", "UNVERIFIED"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        }
+      }
+    },
+    "posture": {
+      "type": "string",
+      "enum": ["SAFE", "WARNING", "UNSAFE", "UNKNOWN"]
+    },
+    "fall_status": {
+      "type": "string",
+      "enum": ["NONE", "POSSIBLE_FALL", "CONFIRMED_FALL"]
+    },
+    "danger_zone": {
+      "type": "object",
+      "required": ["entered"],
+      "properties": {
+        "entered": {
+          "type": "boolean"
+        },
+        "zone_id": {
+          "type": "string"
+        },
+        "zone_name": {
+          "type": "string"
+        }
+      }
+    },
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["SAFE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "details": {
+      "type": "string"
+    }
+  }
+}
