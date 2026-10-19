@@ -33,6 +33,7 @@ export function useSafetyEvents() {
   const [activeAlerts, setActiveAlerts] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -217,8 +218,22 @@ export function useSafetyEvents() {
 
           // Camera status message from Python backend
           if (data.type === 'CAMERA_STATUS') {
-            if (data.active !== undefined) setIsCameraActive(data.active);
+            if (data.active !== undefined) {
+              setIsCameraActive(data.active);
+              if (!data.active) {
+                setLiveFrame(null);
+              }
+            }
             if (data.source) setBackendSource(data.source);
+            if (data.error) {
+              setCameraError({
+                title: "Camera In Use or Unavailable",
+                message: data.error,
+                solution: "Close any other apps (Zoom, Teams, Skype, or other tabs) using the webcam, then click 'Turn Camera On'."
+              });
+            } else if (data.active) {
+              setCameraError(null);
+            }
             return;
           }
 
@@ -338,11 +353,15 @@ export function useSafetyEvents() {
   // Toggle Python Physical Webcam (Strictly on-demand)
   const toggleCamera = useCallback((enable) => {
     let sent = false;
+    setCameraError(null);
     setIsCameraActive(prev => {
       const next = typeof enable === 'boolean' ? enable : !prev;
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ command: next ? 'START_CAMERA' : 'STOP_CAMERA' }));
         sent = true;
+        if (!next) {
+          setLiveFrame(null);
+        }
         return next;
       }
       return false;
@@ -395,6 +414,8 @@ export function useSafetyEvents() {
     liveFrame,
     liveMetrics,
     isCameraActive,
+    cameraError,
+    setCameraError,
     toggleCamera,
     activeWorkers: Object.values(activeWorkers),
     activeAlerts,

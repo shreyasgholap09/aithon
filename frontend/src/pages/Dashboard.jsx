@@ -28,6 +28,8 @@ export default function Dashboard({
   liveFrame,
   liveMetrics = {},
   isCameraActive = false,
+  backendCameraError = null,
+  onClearBackendCameraError,
   onToggleCamera,
   activeWorkers = [], 
   activeAlerts = [], 
@@ -42,6 +44,11 @@ export default function Dashboard({
 }) {
   const [webcamActive, setWebcamActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const effectiveCameraError = backendCameraError || cameraError;
+  const dismissCameraError = React.useCallback(() => {
+    setCameraError(null);
+    if (onClearBackendCameraError) onClearBackendCameraError();
+  }, [onClearBackendCameraError]);
   const [selectedZone, setSelectedZone] = useState('All Zones');
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -211,7 +218,7 @@ export default function Dashboard({
   const isPythonConnected = connectionStatus === 'connected';
 
   const handleCameraToggle = React.useCallback(async () => {
-    setCameraError(null);
+    dismissCameraError();
 
     // If Python AI backend is connected and running:
     if (isPythonConnected && onToggleCamera) {
@@ -224,7 +231,7 @@ export default function Dashboard({
       // Python backend is offline -> Use browser webcam directly so user immediately has working video!
       await toggleWebcam();
     }
-  }, [isPythonConnected, onToggleCamera, webcamActive, stopWebcam, toggleWebcam]);
+  }, [dismissCameraError, isPythonConnected, onToggleCamera, webcamActive, stopWebcam, toggleWebcam]);
 
   useEffect(() => {
     return () => {
@@ -395,16 +402,16 @@ export default function Dashboard({
               )}
 
               {/* Camera Diagnostics Card if Camera Access Encountered Error */}
-              {cameraError && !webcamActive && !liveFrame && (
+              {effectiveCameraError && !webcamActive && !liveFrame && (
                 <div className="z-20 p-6 rounded-2xl bg-slate-900/95 border border-rose-500/40 backdrop-blur-md max-w-md mx-4 text-center shadow-2xl shadow-rose-950/40">
                   <div className="w-12 h-12 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center mx-auto mb-3 text-rose-400">
                     <VideoOff className="w-6 h-6" />
                   </div>
-                  <h3 className="text-sm font-bold text-white mb-1">{cameraError.title}</h3>
-                  <p className="text-xs text-rose-300/90 mb-3">{cameraError.message}</p>
+                  <h3 className="text-sm font-bold text-white mb-1">{effectiveCameraError.title}</h3>
+                  <p className="text-xs text-rose-300/90 mb-3">{effectiveCameraError.message}</p>
                   <div className="text-[11px] bg-slate-950/80 rounded-lg p-2.5 text-slate-300 border border-slate-800 text-left mb-4">
                     <span className="font-semibold text-emerald-400 block mb-0.5">Recommended Fix:</span>
-                    {cameraError.solution}
+                    {effectiveCameraError.solution}
                   </div>
                   <div className="flex items-center justify-center gap-2">
                     <button
@@ -414,7 +421,7 @@ export default function Dashboard({
                       Retry Camera
                     </button>
                     <button
-                      onClick={() => setCameraError(null)}
+                      onClick={dismissCameraError}
                       className="text-xs px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
                     >
                       Dismiss
@@ -424,7 +431,7 @@ export default function Dashboard({
               )}
 
               {/* Graphical Simulation View when live stream is not yet connected */}
-              {!webcamActive && !liveFrame && !cameraError && (
+              {!webcamActive && !liveFrame && !effectiveCameraError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center select-none">
                   {/* Grid background */}
                   <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:3rem_3rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] opacity-30 pointer-events-none" />

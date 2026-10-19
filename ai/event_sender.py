@@ -23,6 +23,7 @@ class EventSender:
         self.port = port
         self.connected_clients: Set[websockets.WebSocketServerProtocol] = set()
         self.on_command_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self.on_connect_callback: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
         self._server = None
         
         # Backpressure guard: tracks pending video transmissions per client
@@ -39,6 +40,15 @@ class EventSender:
             "server_time": time.time()
         }
         await websocket.send(json.dumps(welcome))
+
+        # Immediately dispatch initial state to newly connected client
+        if self.on_connect_callback:
+            try:
+                init_state = self.on_connect_callback()
+                if init_state:
+                    await websocket.send(json.dumps(init_state))
+            except Exception as e:
+                logger.debug(f"Failed to dispatch initial connect state: {e}")
 
     async def unregister(self, websocket):
         self.connected_clients.discard(websocket)

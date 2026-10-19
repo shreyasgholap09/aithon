@@ -83,7 +83,7 @@ DEMO_SCENARIOS = {
 def resolve_source_config(source: Any = None, use_camera: bool = False) -> Tuple[str, str, Any]:
     """
     Resolves the execution source mode:
-        source_mode: 'LIVE_AI' | 'VIDEO_AI' | 'TEST_FIXTURE'
+        source_mode: 'LIVE_AI' | 'VIDEO_AI' | 'TEST_FIXTURE' | 'STANDBY'
         source_label: Human-readable label
         resolved_source: device index (int) or file path
     """
@@ -99,15 +99,19 @@ def resolve_source_config(source: Any = None, use_camera: bool = False) -> Tuple
         vid_path = os.path.abspath(source) if os.path.exists(source) else os.path.join(PROJECT_ROOT, source)
         return "VIDEO_AI", f"Video File ({os.path.basename(vid_path)})", vid_path
 
-    # Physical camera device
-    device_id = 0
-    if source is not None:
-        if isinstance(source, int):
-            device_id = source
-        elif str(source).isdigit():
-            device_id = int(source)
+    # Physical camera device explicitly requested via --camera or numeric device index (e.g. --source 0)
+    if use_camera or (source is not None and (isinstance(source, int) or str(source).isdigit())):
+        device_id = 0
+        if source is not None:
+            if isinstance(source, int):
+                device_id = source
+            elif str(source).isdigit():
+                device_id = int(source)
+        return "LIVE_AI", f"Physical Webcam (Device {device_id})", device_id
 
-    return "LIVE_AI", f"Physical Webcam (Device {device_id})", device_id
+    # Default when no camera source argument is passed: start in STANDBY mode on-demand.
+    # Physical camera hardware is NOT locked until requested by the user in the UI.
+    return "STANDBY", "Camera Standby (On-Demand)", 0
 
 class VideoProcessor:
     def __init__(self, source: Any = None, port: int = 8765, show_window: bool = True, use_camera: bool = False):
@@ -119,8 +123,10 @@ class VideoProcessor:
         self.risk_engine = RiskEngine()
         self.event_sender = EventSender(port=port)
         self.event_sender.on_command_callback = self.handle_frontend_command
+        self.event_sender.on_connect_callback = self._get_initial_state_payload
         self.active_demo_scenario: Optional[Dict[str, Any]] = None
         self.is_running = True
+        self._loop = None
 
         # Resolved source configuration
         self.source_mode, self.source_label, self.resolved_source = resolve_source_config(source, use_camera)
@@ -134,21 +140,36 @@ class VideoProcessor:
         self._inference_fps = 0.0
         self._inf_timestamps: List[float] = []
 
+    def _get_initial_state_payload(self) -> Dict[str, Any]:
+        """Provides instant synchronization payload for newly connected WebSocket clients."""
+        return {
+            "type": "CAMERA_STATUS",
+            "active": self.is_camera_open,
+            "source": self.active_source
+        }
+
     def _notify_camera_status(self, active: bool, error: Optional[str] = None):
-        """Broadcasts camera hardware state to connected frontend clients."""
+        """Broadcasts camera hardware state to connected frontend clients thread-safely."""
+        payload: Dict[str, Any] = {
+            "type": "CAMERA_STATUS",
+            "active": active,
+            "source": "LIVE_AI" if active else "STANDBY"
+        }
+        if error:
+            payload["error"] = error
+
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                payload: Dict[str, Any] = {
-                    "type": "CAMERA_STATUS",
-                    "active": active,
-                    "source": "LIVE_AI" if active else "STANDBY"
-                }
-                if error:
-                    payload["error"] = error
-                loop.create_task(self.event_sender.broadcast_telemetry(payload))
+            loop = getattr(self, "_loop", None)
+            if loop is None or loop.is_closed():
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.get_event_loop()
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.event_sender.broadcast_telemetry(payload), loop)
         except Exception:
             pass
+
 
     def open_camera(self, device_id: Optional[int] = None) -> bool:
         """Acquires physical camera hardware device via dedicated CameraReader thread."""
@@ -313,6 +334,7 @@ class VideoProcessor:
         cv2.putText(frame, f"Active Monitored Workers: {len(detections)}", (15, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
     async def run(self):
+        self._loop = asyncio.get_running_loop()
         # 1. Start WebSocket Server
         await self.event_sender.start()
         print("\n" + "=" * 70)
@@ -345,11 +367,42 @@ class VideoProcessor:
                     self.active_source = "STANDBY"
             elif self.source_mode == "LIVE_AI":
                 self.open_camera(self.resolved_source)
+            elif self.source_mode == "STANDBY":
+                self.active_source = "STANDBY"
+                self.is_camera_open = False
+                print("[VideoProcessor] Pipeline initialized in STANDBY. Webcam hardware unlocked and available on-demand.")
 
         while self.is_running:
             t_cycle_start = time.perf_counter()
             frame = None
             capture_ts = t_cycle_start
+
+            # STANDBY Mode: Camera hardware unlocked and ready; broadcast lightweight telemetry heartbeat
+            if self.active_source == "STANDBY" and self.mode != "DEMO":
+                empty_telemetry = {
+                    "schema_version": "1.0",
+                    "event_id": f"evt-standby-idle-{int(time.time() * 1000)}",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "source": "STANDBY",
+                    "lifecycle_state": "CLEAR",
+                    "worker_id": "NONE",
+                    "location": "Machine Zone A",
+                    "ppe": {
+                        "helmet": {"status": "UNKNOWN", "confidence": 0.0},
+                        "vest": {"status": "UNKNOWN", "confidence": 0.0}
+                    },
+                    "posture": "UNKNOWN",
+                    "fall_status": "NONE",
+                    "danger_zone": {"entered": False, "zone_id": "", "zone_name": ""},
+                    "violations": [],
+                    "risk_score": 0,
+                    "risk_level": "SAFE",
+                    "confidence": 1.0,
+                    "details": "Camera in standby. Click 'Turn Camera On' to begin live AI monitoring."
+                }
+                await self.event_sender.broadcast_telemetry(empty_telemetry)
+                await asyncio.sleep(0.15)
+                continue
 
             # 1. Grab newest frame from CameraReader without buffering lag
             if self.camera_reader is not None and self.camera_reader.running:
@@ -357,6 +410,7 @@ class VideoProcessor:
                 if f is not None:
                     frame = f
                     capture_ts = ts
+
 
             # 2. Grab static test fixture frame
             elif self.source_mode == "TEST_FIXTURE" and self.static_frame is not None and self.mode != "DEMO":

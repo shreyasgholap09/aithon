@@ -18,6 +18,8 @@ export default function App() {
     liveFrame,
     liveMetrics,
     isCameraActive,
+    cameraError,
+    setCameraError,
     toggleCamera,
     activeWorkers,
     activeAlerts,
@@ -58,6 +60,8 @@ export default function App() {
                     liveFrame={liveFrame}
                     liveMetrics={liveMetrics}
                     isCameraActive={isCameraActive}
+                    backendCameraError={cameraError}
+                    onClearBackendCameraError={() => setCameraError(null)}
                     onToggleCamera={toggleCamera}
                     activeWorkers={activeWorkers}
                     activeAlerts={activeAlerts}
