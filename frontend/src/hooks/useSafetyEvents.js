@@ -10,7 +10,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { saveOrUpdateIncident, resolveIncident, getAllIncidents, seedSampleIncidentsIfEmpty } from '../services/indexedDB';
 import { DEMO_SCENARIOS, createSimulatedEvent } from '../services/detectionService';
 
-const WS_URL = 'ws://localhost:8765';
+const WS_URL = (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost')
+  ? `ws://${window.location.hostname}:8765`
+  : 'ws://127.0.0.1:8765';
+
 
 export function useSafetyEvents() {
   const [isConnected, setIsConnected] = useState(false);

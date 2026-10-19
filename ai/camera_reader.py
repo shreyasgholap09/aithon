@@ -102,8 +102,14 @@ class CameraReader:
                     # Revert to original resolution if custom resolution broke capture
                     self.cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, orig_w)
                     self.cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, orig_h)
+                if ret and test_f is not None:
+                    with self.lock:
+                        self.latest_frame = test_f
+                        self.latest_timestamp = time.perf_counter()
+                        self.frame_id = 1
             except Exception:
                 pass
+
 
             self.running = True
             self._last_fps_calc_time = time.perf_counter()

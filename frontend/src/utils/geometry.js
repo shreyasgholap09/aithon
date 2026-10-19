@@ -149,7 +149,7 @@ export function pointInPolygon(point, polygon) {
     if (pt.y > Math.min(p1.y, p2.y) && pt.y <= Math.max(p1.y, p2.y) && pt.x <= Math.max(p1.x, p2.x)) {
       const xinters = p1.y !== p2.y ? (pt.y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y) + p1.x : p1.x;
       if (p1.x === p2.x || pt.x <= xinters) {
-        inside = not inside;
+        inside = !inside;
       }
     }
     p1 = p2;
