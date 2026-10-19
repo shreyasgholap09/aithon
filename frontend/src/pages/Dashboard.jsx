@@ -16,7 +16,12 @@ import {
   Activity,
   Radio,
   FileVideo,
-  Cpu
+  Cpu,
+  Eye,
+  EyeOff,
+  Globe,
+  Tv,
+  Lock
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import AlertCard from '../components/AlertCard';
@@ -114,6 +119,10 @@ export default function Dashboard({
   incidents = [], 
   operatingMode = 'LIVE',
   backendSource = 'LIVE_AI',
+  pipelineState = 'STANDBY',
+  privacyMode = 'OFF',
+  onSetPrivacyMode,
+  onSetVideoSource,
   onTriggerScenario, 
   onSetLiveMode,
   onDismissAlert, 
@@ -122,6 +131,8 @@ export default function Dashboard({
 }) {
   const [webcamActive, setWebcamActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [cctvUrl, setCctvUrl] = useState('');
+  const [showCctvInput, setShowCctvInput] = useState(false);
   const effectiveCameraError = backendCameraError || cameraError;
   const dismissCameraError = React.useCallback(() => {
     setCameraError(null);
@@ -547,6 +558,114 @@ export default function Dashboard({
                 )}
               </div>
             </div>
+
+            {/* Layer 1 Privacy & Ingestion Controls Sub-Bar */}
+            <div className="px-4 py-2 bg-slate-900/60 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+              {/* Privacy Mode Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-emerald-400" />
+                  Privacy Filter:
+                </span>
+                <div className="inline-flex rounded-lg bg-slate-950 p-0.5 border border-slate-800">
+                  <button
+                    onClick={() => onSetPrivacyMode && onSetPrivacyMode('OFF')}
+                    className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                      privacyMode === 'OFF'
+                        ? 'bg-slate-800 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Normal visual frame presentation"
+                  >
+                    Off
+                  </button>
+                  <button
+                    onClick={() => onSetPrivacyMode && onSetPrivacyMode('BLUR_FACES')}
+                    className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                      privacyMode === 'BLUR_FACES'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Dual-pass Gaussian blur over worker face ROIs"
+                  >
+                    Blur Faces
+                  </button>
+                  <button
+                    onClick={() => onSetPrivacyMode && onSetPrivacyMode('SKELETON_ONLY')}
+                    className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                      privacyMode === 'SKELETON_ONLY'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Full anonymized dark canvas with worker wireframe & zone anchors"
+                  >
+                    Skeleton Only
+                  </button>
+                </div>
+              </div>
+
+              {/* Ingestion & Stream Source Selection */}
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                  pipelineState === 'RUNNING' ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' :
+                  pipelineState === 'STARTING' ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' :
+                  pipelineState === 'ERROR' ? 'bg-rose-500/10 text-rose-300 border-rose-500/30' :
+                  'bg-slate-800 text-slate-400 border-slate-700'
+                }`}>
+                  PIPELINE: {pipelineState}
+                </span>
+
+                <button
+                  onClick={() => setShowCctvInput(prev => !prev)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] font-medium flex items-center gap-1 transition"
+                  title="Connect IP CCTV RTSP/HTTP Stream or prerecorded video"
+                >
+                  <Tv className="w-3 h-3 text-cyan-400" />
+                  {showCctvInput ? 'Close Source' : 'IP CCTV / Stream'}
+                </button>
+              </div>
+            </div>
+
+            {/* Expandable CCTV / Stream URL Input Bar */}
+            {showCctvInput && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (cctvUrl && onSetVideoSource) {
+                    onSetVideoSource(cctvUrl.trim());
+                    setShowCctvInput(false);
+                  }
+                }}
+                className="px-4 py-2.5 bg-slate-900 border-b border-cyan-500/30 flex items-center gap-2 text-xs"
+              >
+                <Globe className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <input
+                  type="text"
+                  placeholder="Enter CCTV URL (rtsp://admin:pass@ip:554/live or http://... or sample)"
+                  value={cctvUrl}
+                  onChange={(e) => setCctvUrl(e.target.value)}
+                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!cctvUrl.trim()}
+                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white rounded-lg text-xs font-semibold transition"
+                >
+                  Connect
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onSetVideoSource) onSetVideoSource(0);
+                    setShowCctvInput(false);
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
+                  title="Reset to local Webcam (Device 0)"
+                >
+                  Reset Webcam
+                </button>
+              </form>
+            )}
 
             {/* Video Viewport with AI HUD Overlays */}
             <div className="relative w-full aspect-video bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center overflow-hidden">

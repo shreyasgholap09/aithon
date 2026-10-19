@@ -30,7 +30,9 @@ if PROJECT_ROOT not in sys.path:
 from ai.camera_reader import CameraReader
 from ai.detector import SafetyDetector
 from ai.event_sender import EventSender
+from ai.privacy_filter import PrivacyFilter
 from safety_engine.risk_engine import RiskEngine
+from safety_engine.webhook_dispatcher import WebhookDispatcher
 
 DEMO_SCENARIOS = {
     "1": {
@@ -83,13 +85,17 @@ DEMO_SCENARIOS = {
 def resolve_source_config(source: Any = None, use_camera: bool = False) -> Tuple[str, str, Any]:
     """
     Resolves the execution source mode:
-        source_mode: 'LIVE_AI' | 'VIDEO_AI' | 'TEST_FIXTURE' | 'STANDBY'
+        source_mode: 'LIVE_AI' | 'CCTV_AI' | 'VIDEO_AI' | 'TEST_FIXTURE' | 'STANDBY'
         source_label: Human-readable label
-        resolved_source: device index (int) or file path
+        resolved_source: device index (int), stream URL, or file path
     """
     if source is not None and str(source).lower() == "sample":
         sample_path = os.path.join(PROJECT_ROOT, "ai", "test_sample.jpg")
         return "TEST_FIXTURE", "Test Fixture (Sample Image)", sample_path
+
+    # IP CCTV Stream URL (rtsp://, http://, https://)
+    if source is not None and isinstance(source, str) and (source.startswith("rtsp://") or source.startswith("http://") or source.startswith("https://")):
+        return "CCTV_AI", f"IP CCTV Stream ({source})", source
 
     if source is not None and isinstance(source, str) and source.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
         img_path = os.path.abspath(source) if os.path.exists(source) else os.path.join(PROJECT_ROOT, source)
@@ -114,7 +120,7 @@ def resolve_source_config(source: Any = None, use_camera: bool = False) -> Tuple
     return "STANDBY", "Camera Standby (On-Demand)", 0
 
 class VideoProcessor:
-    def __init__(self, source: Any = None, port: int = 8765, show_window: bool = True, use_camera: bool = False):
+    def __init__(self, source: Any = None, port: int = 8765, show_window: bool = True, use_camera: bool = False, privacy_mode: str = "OFF"):
         self.raw_source = source
         self.port = port
         self.show_window = show_window
@@ -124,6 +130,8 @@ class VideoProcessor:
         self.event_sender = EventSender(port=port)
         self.event_sender.on_command_callback = self.handle_frontend_command
         self.event_sender.on_connect_callback = self._get_initial_state_payload
+        self.privacy_filter = PrivacyFilter(mode=privacy_mode)
+        self.webhook_dispatcher = WebhookDispatcher()
         self.active_demo_scenario: Optional[Dict[str, Any]] = None
         self.is_running = True
         self._loop = None
@@ -142,18 +150,27 @@ class VideoProcessor:
 
     def _get_initial_state_payload(self) -> Dict[str, Any]:
         """Provides instant synchronization payload for newly connected WebSocket clients."""
+        reader_state = self.camera_reader.state if self.camera_reader else ("STANDBY" if self.active_source == "STANDBY" else "RUNNING")
         return {
             "type": "CAMERA_STATUS",
             "active": self.is_camera_open,
-            "source": self.active_source
+            "source": self.active_source,
+            "pipeline_state": reader_state,
+            "privacy_mode": self.privacy_filter.get_mode()
         }
 
     def _notify_camera_status(self, active: bool, error: Optional[str] = None):
-        """Broadcasts camera hardware state to connected frontend clients thread-safely."""
+        """Broadcasts camera hardware and pipeline state to connected frontend clients thread-safely."""
+        reader_state = self.camera_reader.state if self.camera_reader else ("RUNNING" if active else "STANDBY")
+        if error:
+            reader_state = "ERROR"
+
         payload: Dict[str, Any] = {
             "type": "CAMERA_STATUS",
             "active": active,
-            "source": "LIVE_AI" if active else "STANDBY"
+            "source": self.active_source,
+            "pipeline_state": reader_state,
+            "privacy_mode": self.privacy_filter.get_mode()
         }
         if error:
             payload["error"] = error
@@ -170,30 +187,32 @@ class VideoProcessor:
         except Exception:
             pass
 
-
-    def open_camera(self, device_id: Optional[int] = None) -> bool:
-        """Acquires physical camera hardware device via dedicated CameraReader thread."""
+    def open_camera(self, device_id: Optional[Any] = None) -> bool:
+        """Acquires physical camera hardware device or CCTV stream via dedicated CameraReader thread."""
         self.release_camera()
-        dev = device_id if device_id is not None else (self.resolved_source if isinstance(self.resolved_source, int) else 0)
+        dev = device_id if device_id is not None else (
+            self.resolved_source if (isinstance(self.resolved_source, int) or (isinstance(self.resolved_source, str) and self.resolved_source.startswith(("rtsp://", "http")))) else 0
+        )
 
         self.camera_reader = CameraReader(source=dev, target_fps=30.0)
         success = self.camera_reader.start()
         if success:
             self.is_camera_open = True
-            self.source_mode = "LIVE_AI"
-            self.active_source = "LIVE_AI"
-            self.source_label = f"Physical Webcam (Device {dev})"
-            print(f"[VideoProcessor] Camera reader started for device {dev}. Camera LED ON.")
+            is_cctv = isinstance(dev, str) and (dev.startswith("rtsp://") or dev.startswith("http"))
+            self.source_mode = "CCTV_AI" if is_cctv else "LIVE_AI"
+            self.active_source = self.source_mode
+            self.source_label = f"IP CCTV Stream ({dev})" if is_cctv else f"Physical Webcam (Device {dev})"
+            print(f"[VideoProcessor] Camera reader started for source '{dev}'. State: RUNNING.")
             self._notify_camera_status(True)
             return True
         else:
-            print(f"[VideoProcessor] Failed to start camera reader on device {dev}.")
-            print(f"[VideoProcessor] Physical webcam not available. Operating in STANDBY.")
-            print(f"[VideoProcessor] Alternatives: specify --source <video.mp4> or --source sample")
+            err_msg = self.camera_reader.error_message or f"Source '{dev}' not accessible"
+            print(f"[VideoProcessor] Failed to start camera reader on source '{dev}': {err_msg}")
+            print(f"[VideoProcessor] Operating in STANDBY. Alternatives: specify --source <video.mp4> or --source sample")
             self.camera_reader = None
             self.is_camera_open = False
             self.active_source = "STANDBY"
-            self._notify_camera_status(False, f"Device {dev} not accessible")
+            self._notify_camera_status(False, err_msg)
             return False
 
     def release_camera(self):
@@ -205,8 +224,26 @@ class VideoProcessor:
         self.is_camera_open = False
         self._notify_camera_status(False)
 
+    def switch_source(self, new_source: Any):
+        """Switches video input source cleanly without creating duplicate processing loops."""
+        print(f"[VideoProcessor] Switching source to: {new_source}")
+        self.release_camera()
+        self.mode = "LIVE"
+        self.active_demo_scenario = None
+        self.source_mode, self.source_label, self.resolved_source = resolve_source_config(new_source)
+        self.active_source = self.source_mode
+
+        if self.source_mode in ("LIVE_AI", "CCTV_AI", "VIDEO_AI"):
+            self.open_camera(self.resolved_source)
+        elif self.source_mode == "TEST_FIXTURE":
+            if self.cv2 is not None:
+                self.static_frame = self.cv2.imread(self.resolved_source)
+            self._notify_camera_status(True)
+        elif self.source_mode == "STANDBY":
+            self._notify_camera_status(False)
+
     def handle_frontend_command(self, cmd: str, data: Dict[str, Any]):
-        """Receives mode toggles, scenario triggers, and camera commands from frontend."""
+        """Receives mode toggles, scenario triggers, privacy modes, and camera commands from frontend."""
         print(f"[VideoProcessor] Received frontend command: {cmd}")
         if cmd.startswith("SCENARIO_"):
             scenario_key = cmd.replace("SCENARIO_", "")
@@ -225,10 +262,19 @@ class VideoProcessor:
             print("[VideoProcessor] STOP_CAMERA command received. Deactivating webcam...")
             self.release_camera()
             self.active_source = "STANDBY"
+        elif cmd == "SET_PRIVACY_MODE":
+            mode = data.get("mode", "OFF")
+            self.privacy_filter.set_mode(mode)
+            print(f"[VideoProcessor] Privacy filter mode updated to: {self.privacy_filter.get_mode()}")
+            self._notify_camera_status(self.is_camera_open)
+        elif cmd == "SET_SOURCE":
+            src = data.get("source")
+            if src is not None:
+                self.switch_source(src)
         elif cmd == "MODE_LIVE":
             self.mode = "LIVE"
             self.active_demo_scenario = None
-            if self.source_mode == "LIVE_AI":
+            if self.source_mode in ("LIVE_AI", "CCTV_AI"):
                 self.open_camera()
             else:
                 self.active_source = self.source_mode
@@ -452,10 +498,12 @@ class VideoProcessor:
                 event["bbox"] = detection["bbox"]
                 analyzed_workers.append(event)
 
+                display_frame = None
                 if self.cv2 is not None and frame is not None:
-                    self._draw_scene_overlay(frame, analyzed_workers, self.cv2)
+                    display_frame = self.privacy_filter.apply(frame.copy(), analyzed_workers)
+                    self._draw_scene_overlay(display_frame, analyzed_workers, self.cv2)
                     t_enc0 = time.perf_counter()
-                    scaled = self.cv2.resize(frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
+                    scaled = self.cv2.resize(display_frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
                     _, buf = self.cv2.imencode('.jpg', scaled, [int(self.cv2.IMWRITE_JPEG_QUALITY), 55])
                     frame_image_b64 = f"data:image/jpeg;base64,{base64.b64encode(buf).decode('utf-8')}"
                     encode_ms = (time.perf_counter() - t_enc0) * 1000.0
@@ -469,7 +517,9 @@ class VideoProcessor:
                     "tx_ms": round(self.event_sender.last_tx_ms, 1),
                     "e2e_latency_ms": round((time.perf_counter() - capture_ts) * 1000.0, 1),
                     "ppe_reused": False,
-                    "active_source": "SIMULATED"
+                    "active_source": "SIMULATED",
+                    "privacy_mode": self.privacy_filter.get_mode(),
+                    "pipeline_state": "RUNNING"
                 }
                 await self.event_sender.broadcast_video_frame(frame_image_b64, metrics=metrics)
                 await self.event_sender.broadcast_telemetry(event)
@@ -500,10 +550,12 @@ class VideoProcessor:
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                         })
 
+                    display_frame = None
                     if self.cv2 is not None and frame is not None:
-                        self._draw_scene_overlay(frame, [], self.cv2)
+                        display_frame = self.privacy_filter.apply(frame.copy(), [])
+                        self._draw_scene_overlay(display_frame, [], self.cv2)
                         t_enc0 = time.perf_counter()
-                        scaled = self.cv2.resize(frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
+                        scaled = self.cv2.resize(display_frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
                         _, buf = self.cv2.imencode('.jpg', scaled, [int(self.cv2.IMWRITE_JPEG_QUALITY), 55])
                         frame_image_b64 = f"data:image/jpeg;base64,{base64.b64encode(buf).decode('utf-8')}"
                         encode_ms = (time.perf_counter() - t_enc0) * 1000.0
@@ -530,6 +582,7 @@ class VideoProcessor:
                         "details": "Area clear. No workers currently in optical field of view." if self.active_source != "STANDBY" else "Camera standby. Waiting for stream input."
                     }
 
+                    pipeline_st = self.camera_reader.state if self.camera_reader else ("RUNNING" if self.active_source != "STANDBY" else "STANDBY")
                     metrics = {
                         "capture_fps": round(self.camera_reader.capture_fps if self.camera_reader else (30.0 if self.active_source == "TEST_FIXTURE" else 0.0), 1),
                         "inference_fps": round(self._inference_fps, 1),
@@ -539,7 +592,9 @@ class VideoProcessor:
                         "tx_ms": round(self.event_sender.last_tx_ms, 1),
                         "e2e_latency_ms": round((time.perf_counter() - capture_ts) * 1000.0, 1),
                         "ppe_reused": det_metrics["ppe_reused"],
-                        "active_source": current_effective_source
+                        "active_source": current_effective_source,
+                        "privacy_mode": self.privacy_filter.get_mode(),
+                        "pipeline_state": pipeline_st
                     }
                     await self.event_sender.broadcast_video_frame(frame_image_b64, metrics=metrics)
                     await self.event_sender.broadcast_telemetry(empty_telemetry)
@@ -571,6 +626,8 @@ class VideoProcessor:
                                 "source": current_effective_source,
                                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                             })
+                            if self.webhook_dispatcher.is_active():
+                                asyncio.create_task(self.webhook_dispatcher.dispatch(inc))
 
                         # Broadcast resolved incident records
                         for inc in resolved_incidents:
@@ -591,14 +648,17 @@ class VideoProcessor:
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                         })
 
+                    display_frame = None
                     if self.cv2 is not None and frame is not None:
-                        self._draw_scene_overlay(frame, analyzed_workers, self.cv2)
+                        display_frame = self.privacy_filter.apply(frame.copy(), analyzed_workers)
+                        self._draw_scene_overlay(display_frame, analyzed_workers, self.cv2)
                         t_enc0 = time.perf_counter()
-                        scaled = self.cv2.resize(frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
+                        scaled = self.cv2.resize(display_frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
                         _, buf = self.cv2.imencode('.jpg', scaled, [int(self.cv2.IMWRITE_JPEG_QUALITY), 55])
                         frame_image_b64 = f"data:image/jpeg;base64,{base64.b64encode(buf).decode('utf-8')}"
                         encode_ms = (time.perf_counter() - t_enc0) * 1000.0
 
+                    pipeline_st = self.camera_reader.state if self.camera_reader else ("RUNNING" if self.active_source != "STANDBY" else "STANDBY")
                     metrics = {
                         "capture_fps": round(self.camera_reader.capture_fps if self.camera_reader else (30.0 if self.active_source == "TEST_FIXTURE" else 0.0), 1),
                         "inference_fps": round(self._inference_fps, 1),
@@ -608,7 +668,9 @@ class VideoProcessor:
                         "tx_ms": round(self.event_sender.last_tx_ms, 1),
                         "e2e_latency_ms": round((time.perf_counter() - capture_ts) * 1000.0, 1),
                         "ppe_reused": det_metrics["ppe_reused"],
-                        "active_source": current_effective_source
+                        "active_source": current_effective_source,
+                        "privacy_mode": self.privacy_filter.get_mode(),
+                        "pipeline_state": pipeline_st
                     }
 
                     # Broadcast video frame payload
@@ -626,30 +688,32 @@ class VideoProcessor:
                 self._inference_fps = (len(self._inf_timestamps) - 1) / (self._inf_timestamps[-1] - self._inf_timestamps[0] + 1e-6)
 
             # Optional desktop window visualizer
-            if self.show_window and self.cv2 is not None and frame is not None:
-                try:
-                    self.cv2.imshow("ErgoGuard AI - Live Inference Pipeline", frame)
-                    key = self.cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
-                        break
-                    elif key == ord('c'):
-                        if self.camera_reader is None:
-                            self.open_camera(0)
-                        else:
-                            self.release_camera()
-                    elif key == ord('l'):
-                        self.mode = "LIVE"
-                        self.active_demo_scenario = None
-                        if self.source_mode == "LIVE_AI":
-                            self.open_camera()
-                        else:
-                            self.active_source = self.source_mode
-                    elif key == ord('r'):
-                        self.handle_frontend_command("RESET", {})
-                    elif chr(key) in DEMO_SCENARIOS:
-                        self.handle_frontend_command(f"SCENARIO_{chr(key)}", {})
-                except Exception:
-                    pass
+            if self.show_window and self.cv2 is not None:
+                vis_frame = display_frame if ('display_frame' in locals() and display_frame is not None) else frame
+                if vis_frame is not None:
+                    try:
+                        self.cv2.imshow("ErgoGuard AI - Live Inference Pipeline", vis_frame)
+                        key = self.cv2.waitKey(1) & 0xFF
+                        if key == ord('q'):
+                            break
+                        elif key == ord('c'):
+                            if self.camera_reader is None:
+                                self.open_camera(0)
+                            else:
+                                self.release_camera()
+                        elif key == ord('l'):
+                            self.mode = "LIVE"
+                            self.active_demo_scenario = None
+                            if self.source_mode == "LIVE_AI":
+                                self.open_camera()
+                            else:
+                                self.active_source = self.source_mode
+                        elif key == ord('r'):
+                            self.handle_frontend_command("RESET", {})
+                        elif chr(key) in DEMO_SCENARIOS:
+                            self.handle_frontend_command(f"SCENARIO_{chr(key)}", {})
+                    except Exception:
+                        pass
 
             await asyncio.sleep(0.01)
 

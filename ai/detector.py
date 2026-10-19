@@ -134,7 +134,11 @@ class SafetyDetector:
                     frame_shape=(frame_h, frame_w)
                 )
             else:
-                posture_status, smoothed_angle, pose_conf = "UNKNOWN", 0.0, 0.0
+                posture_status, smoothed_angle, pose_conf, _, _ = self.pose_detector.detect_worker_pose(
+                    frame,
+                    worker_bbox=(x, y, w, h),
+                    worker_id=w_id
+                )
 
             # 5. Fall detection from temporal kinematics
             fall_status, fall_conf = self.fall_detector.update_and_detect(

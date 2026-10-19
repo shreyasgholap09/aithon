@@ -37,6 +37,8 @@ export function useSafetyEvents() {
   const [incidents, setIncidents] = useState([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [privacyMode, setPrivacyModeState] = useState('OFF');
+  const [pipelineState, setPipelineState] = useState('STANDBY');
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -209,6 +211,8 @@ export function useSafetyEvents() {
             if (data.metrics) {
               setLiveMetrics(data.metrics);
               if (data.metrics.active_source) setBackendSource(data.metrics.active_source);
+              if (data.metrics.privacy_mode) setPrivacyModeState(data.metrics.privacy_mode);
+              if (data.metrics.pipeline_state) setPipelineState(data.metrics.pipeline_state);
             }
             return;
           }
@@ -228,6 +232,8 @@ export function useSafetyEvents() {
               }
             }
             if (data.source) setBackendSource(data.source);
+            if (data.privacy_mode) setPrivacyModeState(data.privacy_mode);
+            if (data.pipeline_state) setPipelineState(data.pipeline_state);
             if (data.error) {
               setCameraError({
                 title: "Camera In Use or Unavailable",
@@ -403,6 +409,21 @@ export function useSafetyEvents() {
     }
   }, [activeAlerts, refreshIncidents]);
 
+  // Set Privacy Filter mode (OFF, BLUR_FACES, SKELETON_ONLY)
+  const setPrivacyMode = useCallback((mode) => {
+    setPrivacyModeState(mode);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ command: 'SET_PRIVACY_MODE', mode }));
+    }
+  }, []);
+
+  // Switch video input source (Webcam, CCTV URL, or video file)
+  const setVideoSource = useCallback((source) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ command: 'SET_SOURCE', source }));
+    }
+  }, []);
+
   const clearAlerts = useCallback(() => {
     setActiveAlerts([]);
   }, []);
@@ -412,6 +433,10 @@ export function useSafetyEvents() {
     connectionStatus,
     operatingMode,
     backendSource,
+    pipelineState,
+    privacyMode,
+    setPrivacyMode,
+    setVideoSource,
     setLiveMode,
     latestEvent,
     liveFrame,

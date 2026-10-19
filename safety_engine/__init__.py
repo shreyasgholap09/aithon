@@ -8,6 +8,7 @@ from .ppe_rules import evaluate_ppe
 from .posture_rules import evaluate_posture
 from .fall_rules import evaluate_fall
 from .zone_rules import evaluate_zone
+from .webhook_dispatcher import WebhookDispatcher
 
 __all__ = [
     "RiskEngine",
@@ -15,5 +16,6 @@ __all__ = [
     "evaluate_ppe",
     "evaluate_posture",
     "evaluate_fall",
-    "evaluate_zone"
+    "evaluate_zone",
+    "WebhookDispatcher"
 ]

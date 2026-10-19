@@ -54,6 +54,68 @@ class PoseDetector:
         # Temporal smoothing history per worker: worker_id -> smoothed_spine_angle
         self._smoothed_angles: Dict[str, float] = {}
 
+        # Optional MediaPipe Pose Estimator
+        self.mp_pose = None
+        self.has_mediapipe = False
+        try:
+            import mediapipe as mp
+            self.mp_pose = mp.solutions.pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                smooth_landmarks=True,
+                min_detection_confidence=0.45,
+                min_tracking_confidence=0.45
+            )
+            self.has_mediapipe = True
+            print("[PoseDetector] MediaPipe Pose module initialized successfully.")
+        except Exception:
+            self.has_mediapipe = False
+
+    def detect_worker_pose(
+        self,
+        frame: Optional[Any],
+        worker_bbox: Tuple[int, int, int, int],
+        worker_id: str = "W01"
+    ) -> Tuple[str, float, float, Dict[str, float], Optional[Any]]:
+        """
+        Runs real human pose estimation on the worker crop or frame.
+        Returns:
+            (posture_status, smoothed_spine_angle, confidence, angles_breakdown, landmarks)
+            
+        Policy: If MediaPipe is not installed, returns ('UNAVAILABLE', 0.0, 0.0, {}, None).
+        If landmarks are missing or below confidence threshold, returns ('UNKNOWN', 0.0, 0.0, {}, None).
+        Never classifies missing data as SAFE.
+        """
+        if not self.has_mediapipe or self.mp_pose is None or frame is None:
+            return "UNAVAILABLE", 0.0, 0.0, {}, None
+
+        try:
+            h, w = frame.shape[:2]
+            bx, by, bw, bh = worker_bbox
+            x1 = max(0, min(bx, w - 1))
+            y1 = max(0, min(by, h - 1))
+            x2 = max(x1 + 1, min(bx + bw, w))
+            y2 = max(y1 + 1, min(by + bh, h))
+
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 20:
+                return "UNKNOWN", 0.0, 0.0, {}, None
+
+            import cv2
+            rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            results = self.mp_pose.process(rgb_crop)
+            if results and results.pose_landmarks:
+                status, angle, conf, breakdown = self.analyze_landmarks(
+                    results.pose_landmarks,
+                    worker_id=worker_id,
+                    frame_shape=(y2 - y1, x2 - x1)
+                )
+                return status, angle, conf, breakdown, results.pose_landmarks
+        except Exception:
+            pass
+
+        return "UNKNOWN", 0.0, 0.0, {}, None
+
     def calculate_spine_angle(
         self,
         shoulder_midpoint: Tuple[float, float],

@@ -9,7 +9,9 @@ import {
   MapPin, 
   User, 
   RefreshCw,
-  Tag
+  Tag,
+  FileSpreadsheet,
+  Printer
 } from 'lucide-react';
 import RiskBadge from '../components/RiskBadge';
 import { clearAllIncidents } from '../services/indexedDB';
@@ -49,6 +51,191 @@ export default function Incidents({ incidents = [], onRefresh }) {
     }
   };
 
+  // Export incidents as CSV
+  const handleExportCSV = () => {
+    if (!incidents || incidents.length === 0) return;
+
+    const escapeCSV = (val) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const headers = [
+      'Incident ID',
+      'Worker ID',
+      'Location',
+      'Violation Type',
+      'Severity',
+      'Risk Score',
+      'Lifecycle State',
+      'First Detected At',
+      'Last Seen At',
+      'Source',
+      'Details / Evidence'
+    ];
+
+    const rows = filtered.map(inc => [
+      escapeCSV(inc.incident_id || 'N/A'),
+      escapeCSV(inc.worker_id || 'UNKNOWN'),
+      escapeCSV(inc.location || 'N/A'),
+      escapeCSV(Array.isArray(inc.violations) ? inc.violations.join('; ') : (inc.violation || 'N/A')),
+      escapeCSV(inc.severity || inc.risk_level || 'UNKNOWN'),
+      escapeCSV(typeof inc.risk_score === 'number' ? inc.risk_score.toFixed(1) : (inc.risk_score || 'N/A')),
+      escapeCSV(inc.lifecycle_state || 'ACTIVE'),
+      escapeCSV(inc.first_detected_at || inc.timestamp || 'N/A'),
+      escapeCSV(inc.last_seen_at || inc.timestamp || 'N/A'),
+      escapeCSV(inc.source || 'LIVE_AI'),
+      escapeCSV(inc.details || inc.resolution_reason || 'Observational inference')
+    ]);
+
+    const disclaimer = [
+      '# ErgoGuard AI Workplace Safety & Compliance Audit Log',
+      `# Generated: ${new Date().toISOString()}`,
+      '# DISCLAIMER: Observational computer vision monitoring data only. Not a certified occupational health and safety compliance assessment or medical diagnosis.'
+    ].join('\n');
+
+    const csvContent = disclaimer + '\n' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', url);
+    downloadAnchor.setAttribute('download', `ergoguard_safety_incidents_${Date.now()}.csv`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // Generate and print / save PDF Safety Incident Audit Report
+  const handlePrintPDFReport = () => {
+    if (!incidents || incidents.length === 0) return;
+
+    const criticalCount = filtered.filter(i => (i.severity || i.risk_level) === 'CRITICAL').length;
+    const highCount = filtered.filter(i => (i.severity || i.risk_level) === 'HIGH').length;
+    const resolvedCount = filtered.filter(i => i.lifecycle_state === 'RESOLVED').length;
+    const activeCount = filtered.length - resolvedCount;
+
+    const reportWindow = window.open('', '_blank');
+    if (!reportWindow) {
+      alert('Please allow popups to generate the printable PDF report.');
+      return;
+    }
+
+    const tableRowsHtml = filtered.map(inc => `
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${inc.incident_id || 'N/A'}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">${inc.worker_id || 'UNKNOWN'}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0;">${inc.location || 'N/A'}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; color: #dc2626; font-weight: 600;">${Array.isArray(inc.violations) ? inc.violations.join(', ') : (inc.violation || 'N/A')}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0;">
+          <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; background: ${(inc.severity || inc.risk_level) === 'CRITICAL' ? '#fee2e2; color: #b91c1c;' : (inc.severity || inc.risk_level) === 'HIGH' ? '#ffedd5; color: #c2410c;' : '#f1f5f9; color: #475569;'}">
+            ${inc.severity || inc.risk_level || 'UNKNOWN'}
+          </span>
+        </td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${inc.first_detected_at ? new Date(inc.first_detected_at).toLocaleString() : 'N/A'}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${inc.source || 'LIVE_AI'}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: bold; color: ${inc.lifecycle_state === 'RESOLVED' ? '#16a34a' : '#ea580c'};">${inc.lifecycle_state || 'ACTIVE'}</td>
+      </tr>
+    `).join('');
+
+    reportWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>ErgoGuard AI - Workplace Safety Incident Audit Report</title>
+        <style>
+          @page { size: landscape; margin: 15mm; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; margin: 0; padding: 20px; font-size: 12px; }
+          .header { border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-start; }
+          .title { font-size: 20px; font-weight: 800; color: #0f172a; margin: 0; }
+          .subtitle { font-size: 11px; color: #64748b; margin-top: 4px; }
+          .meta { text-align: right; font-size: 11px; color: #64748b; }
+          .kpi-row { display: flex; gap: 12px; margin-bottom: 16px; }
+          .kpi-card { flex: 1; padding: 10px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+          .kpi-val { font-size: 18px; font-weight: 800; color: #0f172a; }
+          .kpi-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th { background: #0f172a; color: #ffffff; text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 700; }
+          .disclaimer { margin-top: 24px; padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 10px; color: #991b1b; line-height: 1.4; }
+          @media print {
+            .no-print { display: none !important; }
+            body { padding: 0; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1 class="title">🛡️ ErgoGuard AI — Workplace Safety Audit Report</h1>
+            <div class="subtitle">Intelligent Computer Vision Workplace Safety & Ergonomics Monitoring Platform</div>
+          </div>
+          <div class="meta">
+            <div><strong>Generated:</strong> ${new Date().toLocaleString()}</div>
+            <div><strong>Total Records:</strong> ${filtered.length}</div>
+            <div><strong>Filter Scope:</strong> ${selectedSeverity} severity | ${selectedSource} source</div>
+          </div>
+        </div>
+
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div class="kpi-val">${filtered.length}</div>
+            <div class="kpi-label">Total Audited Events</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color: #dc2626;">${criticalCount}</div>
+            <div class="kpi-label">Critical Severity</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color: #ea580c;">${highCount}</div>
+            <div class="kpi-label">High Severity</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color: #16a34a;">${resolvedCount}</div>
+            <div class="kpi-label">Resolved Conditions</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color: #2563eb;">${activeCount}</div>
+            <div class="kpi-label">Active / Ongoing</div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Incident ID</th>
+              <th>Worker ID</th>
+              <th>Location</th>
+              <th>Violation</th>
+              <th>Severity</th>
+              <th>First Detected</th>
+              <th>Source</th>
+              <th>Lifecycle State</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRowsHtml}
+          </tbody>
+        </table>
+
+        <div class="disclaimer">
+          <strong>LEGAL & REGULATORY OBSERVATIONAL MONITORING NOTICE:</strong><br>
+          This document is an observational safety-monitoring report automatically generated by ErgoGuard AI using optical computer vision inference and spatial heuristic engines. It is designed to assist safety coordinators and ergonomists in identifying potential hazards. This report does not constitute a certified occupational safety and health regulatory compliance certification, medical diagnosis, or legally binding safety clearance.
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          };
+        </script>
+      </body>
+      </html>
+    `);
+    reportWindow.document.close();
+  };
+
   // Export incidents as JSON
   const handleExportJSON = () => {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(incidents, null, 2));
@@ -78,7 +265,7 @@ export default function Incidents({ incidents = [], onRefresh }) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {onRefresh && (
             <button
               onClick={onRefresh}
@@ -89,6 +276,24 @@ export default function Incidents({ incidents = [], onRefresh }) {
               Refresh
             </button>
           )}
+          <button
+            onClick={handleExportCSV}
+            disabled={incidents.length === 0}
+            className="px-3.5 py-2 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-700/50 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-40"
+            title="Export filtered records as CSV audit sheet"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            Export CSV
+          </button>
+          <button
+            onClick={handlePrintPDFReport}
+            disabled={incidents.length === 0}
+            className="px-3.5 py-2 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-700/50 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-40"
+            title="Print or Save Safety Report as PDF"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            PDF Report
+          </button>
           <button
             onClick={handleExportJSON}
             disabled={incidents.length === 0}

@@ -13,6 +13,10 @@ export default function App() {
     connectionStatus,
     operatingMode,
     backendSource,
+    pipelineState,
+    privacyMode,
+    setPrivacyMode,
+    setVideoSource,
     setLiveMode,
     latestEvent,
     liveFrame,
@@ -68,6 +72,10 @@ export default function App() {
                     incidents={incidents}
                     operatingMode={operatingMode}
                     backendSource={backendSource}
+                    pipelineState={pipelineState}
+                    privacyMode={privacyMode}
+                    onSetPrivacyMode={setPrivacyMode}
+                    onSetVideoSource={setVideoSource}
                     onTriggerScenario={triggerScenario}
                     onSetLiveMode={setLiveMode}
                     onDismissAlert={dismissAlert}
