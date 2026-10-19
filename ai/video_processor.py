@@ -317,8 +317,13 @@ class VideoProcessor:
         for det in detections:
             bx, by, bw, bh = det["bbox"]
             risk_level = det.get("risk_level", "SAFE")
+            fall = det.get("fall_status", "NONE")
 
-            if risk_level == "CRITICAL":
+            if fall in ("CONFIRMED_FALL", "FALL_DETECTED"):
+                box_color = (0, 0, 255)  # Bright Red
+            elif fall == "POSSIBLE_FALL":
+                box_color = (0, 140, 255) # High-Visibility Amber/Orange
+            elif risk_level == "CRITICAL":
                 box_color = (0, 0, 255)  # Bright Red
             elif risk_level in ("HIGH", "MEDIUM"):
                 box_color = (0, 165, 255)  # Amber
@@ -326,12 +331,19 @@ class VideoProcessor:
                 box_color = (0, 220, 0)  # Green
 
             # Bounding box
-            cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), box_color, 2)
+            thickness = 3 if fall in ("CONFIRMED_FALL", "FALL_DETECTED") else 2
+            cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), box_color, thickness)
 
             # Top label badge: Worker ID & Confidence
             w_id = det.get("worker_id", "W01")
             conf = int(det.get("confidence", 0.90) * 100)
-            top_label = f"{w_id} ({conf}%)"
+            if fall in ("CONFIRMED_FALL", "FALL_DETECTED"):
+                top_label = f"{w_id} [FALL CONFIRMED]"
+            elif fall == "POSSIBLE_FALL":
+                top_label = f"{w_id} [POSSIBLE FALL]"
+            else:
+                top_label = f"{w_id} ({conf}%)"
+
             (tw, th), _ = cv2.getTextSize(top_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(frame, (bx, max(0, by - 22)), (bx + tw + 10, by), box_color, -1)
             cv2.putText(frame, top_label, (bx + 5, by - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -339,7 +351,6 @@ class VideoProcessor:
             # Sub-badges for PPE and Posture
             h_status = det.get("ppe", {}).get("helmet", {}).get("status", "UNKNOWN")
             v_status = det.get("ppe", {}).get("vest", {}).get("status", "UNKNOWN")
-            fall = det.get("fall_status", "NONE")
             posture = det.get("posture", "SAFE")
 
             badge_y = by + 20
@@ -352,9 +363,12 @@ class VideoProcessor:
             v_col = (0, 200, 0) if v_status == "PRESENT" else ((0, 0, 255) if v_status == "MISSING" else (180, 180, 180))
             cv2.putText(frame, v_txt, (bx + 5, badge_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, v_col, 1)
 
-            if fall == "CONFIRMED_FALL":
+            if fall in ("CONFIRMED_FALL", "FALL_DETECTED"):
                 badge_y += 18
                 cv2.putText(frame, "EMERGENCY: FALL", (bx + 5, badge_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
+            elif fall == "POSSIBLE_FALL":
+                badge_y += 18
+                cv2.putText(frame, "CAUTION: FALL RISK", (bx + 5, badge_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 140, 255), 2)
             elif posture == "UNSAFE":
                 badge_y += 18
                 cv2.putText(frame, "POSTURE: STRAIN", (bx + 5, badge_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1)
@@ -491,6 +505,7 @@ class VideoProcessor:
                     posture=detection["posture"],
                     fall_input=detection["fall_status"],
                     danger_zone_input=detection["danger_zone"],
+                    spine_angle=detection.get("spine_angle", 0.0),
                     confidence=detection["confidence"],
                     source="SIMULATED",
                     is_observed=True

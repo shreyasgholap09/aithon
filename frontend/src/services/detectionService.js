@@ -95,18 +95,20 @@ export const DEMO_SCENARIOS = [
       lifecycle_state: 'ACTIVE',
       worker_id: 'W04',
       location: 'Loading Bay Ramp C',
+      bbox: [0.16, 0.65, 0.60, 0.22],
+      spine_angle: 84.0,
       ppe: {
         helmet: { status: 'PRESENT', confidence: 0.91 },
         vest: { status: 'PRESENT', confidence: 0.90 }
       },
-      posture: 'UNSAFE',
+      posture: 'HIGH_RISK',
       fall_status: 'CONFIRMED_FALL',
       danger_zone: { entered: false, zone_id: 'RAMP_C', zone_name: 'Loading Bay' },
       violations: ['fall_detected'],
       risk_score: 50,
       risk_level: 'CRITICAL',
       confidence: 0.98,
-      details: 'CRITICAL EMERGENCY: Confirmed worker fall detected! Immediate response needed.'
+      details: 'CRITICAL EMERGENCY: Confirmed worker fall detected! Worker prostrate at 84° spine angle.'
     }
   },
   {

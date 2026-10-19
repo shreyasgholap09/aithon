@@ -143,7 +143,9 @@ class SafetyDetector:
             # 5. Fall detection from temporal kinematics
             fall_status, fall_conf = self.fall_detector.update_and_detect(
                 worker_id=w_id,
-                bbox=(x, y, w, h)
+                bbox=(x, y, w, h),
+                spine_angle=smoothed_angle,
+                worker_landmarks=worker_landmarks
             )
 
             # 6. Danger zone intrusion check against configurable polygons
@@ -184,31 +186,47 @@ class SafetyDetector:
         """
         w_id = scenario.get("worker_id", "W01")
         location = scenario.get("location", "Machine Zone A")
+        raw_fall = scenario.get("fall_status", scenario.get("fall_detected", False))
+        is_fall = raw_fall in ["FALL_DETECTED", "CONFIRMED_FALL", "POSSIBLE_FALL", True]
+        
+        sim_bbox = (100, 240, 280, 95) if is_fall else tuple(scenario.get("bbox", (120, 100, 140, 280)))
+        
         raw_ppe = scenario.get("ppe", {"helmet": True, "vest": True})
         ppe_status, ppe_conf = self.ppe_detector.inspect_worker(
-            worker_bbox=(120, 100, 140, 280),
+            worker_bbox=sim_bbox,
             frame_ppe_detections=[],
             worker_crop=None,
             simulated_override=raw_ppe
         )
 
-        raw_posture = scenario.get("posture", "SAFE")
-        posture_status, angle, pose_conf = self.pose_detector.classify_posture(w_id, 0.0, simulated_override=raw_posture)
+        raw_posture = scenario.get("posture", "HIGH_RISK" if is_fall else "SAFE")
+        posture_status, angle, pose_conf = self.pose_detector.classify_posture(
+            w_id,
+            82.5 if is_fall else 0.0,
+            simulated_override=raw_posture
+        )
 
-        raw_fall = scenario.get("fall_status", scenario.get("fall_detected", False))
-        fall_status, fall_conf = self.fall_detector.update_and_detect(w_id, (120, 100, 140, 280), simulated_override=raw_fall)
+        fall_status, fall_conf = self.fall_detector.update_and_detect(
+            w_id,
+            sim_bbox,
+            simulated_override=raw_fall,
+            spine_angle=82.5 if is_fall else 0.0
+        )
 
         raw_zone = scenario.get("danger_zone", False)
-        entered, zone_id, zone_name, zone_conf = self.zone_detector.check_zone_intrusion((120, 100, 140, 280), simulated_override=raw_zone)
+        entered, zone_id, zone_name, zone_conf = self.zone_detector.check_zone_intrusion(
+            sim_bbox,
+            simulated_override=raw_zone
+        )
 
         return {
             "source": "SIMULATED",
             "worker_id": w_id,
-            "bbox": (120, 100, 140, 280),
+            "bbox": sim_bbox,
             "location": location,
             "ppe": ppe_status,
             "posture": posture_status,
-            "spine_angle": angle,
+            "spine_angle": 82.5 if is_fall else angle,
             "fall_status": fall_status,
             "danger_zone": {
                 "entered": entered,

@@ -85,8 +85,8 @@ function getBoxStyles(bbox) {
   if (x > 1 || y > 1 || w > 1 || h > 1) {
     const normX = Math.max(0, Math.min(0.88, x / 640));
     const normY = Math.max(0, Math.min(0.88, y / 360));
-    const normW = Math.max(0.14, Math.min(1 - normX, w / 640));
-    const normH = Math.max(0.20, Math.min(1 - normY, h / 360));
+    const normW = Math.max(0.10, Math.min(1 - normX, w / 640));
+    const normH = Math.max(0.10, Math.min(1 - normY, h / 360));
     return {
       left: `${(normX * 100).toFixed(1)}%`,
       top: `${(normY * 100).toFixed(1)}%`,
@@ -96,8 +96,8 @@ function getBoxStyles(bbox) {
   }
   const normX = Math.max(0, Math.min(0.88, x));
   const normY = Math.max(0, Math.min(0.88, y));
-  const normW = Math.max(0.14, Math.min(1 - normX, w));
-  const normH = Math.max(0.20, Math.min(1 - normY, h));
+  const normW = Math.max(0.10, Math.min(1 - normX, w));
+  const normH = Math.max(0.10, Math.min(1 - normY, h));
   return {
     left: `${(normX * 100).toFixed(1)}%`,
     top: `${(normY * 100).toFixed(1)}%`,
@@ -750,8 +750,10 @@ export default function Dashboard({
               {/* AI VISION HUD LAYER: Real-time Worker Bounding Boxes & Kinematic Badges */}
               {effectiveWorkers.map((w, idx) => {
                 const boxStyle = getBoxStyles(w.bbox);
-                const isCritical = w.risk_level === 'CRITICAL' || w.danger_zone?.entered || w.fall_status === 'CONFIRMED_FALL';
-                const isWarning = w.risk_level === 'HIGH' || w.risk_level === 'MEDIUM' || w.posture === 'UNSAFE';
+                const isFallConfirmed = w.fall_status === 'CONFIRMED_FALL' || w.fall_status === 'FALL_DETECTED';
+                const isFallPossible = w.fall_status === 'POSSIBLE_FALL';
+                const isCritical = w.risk_level === 'CRITICAL' || w.danger_zone?.entered || isFallConfirmed;
+                const isWarning = w.risk_level === 'HIGH' || w.risk_level === 'MEDIUM' || w.posture === 'UNSAFE' || isFallPossible;
 
                 return (
                   <div
@@ -775,9 +777,16 @@ export default function Dashboard({
                     </div>
 
                     {/* Fall Emergency Banner */}
-                    {w.fall_status === 'CONFIRMED_FALL' && (
-                      <div className="bg-rose-600/90 border border-rose-400 text-white text-[10px] font-mono font-extrabold px-2 py-1 rounded text-center animate-bounce shadow-lg">
-                        🚨 EMERGENCY: FALL DETECTED
+                    {isFallConfirmed && (
+                      <div className="bg-rose-600/95 border border-rose-400 text-white text-[10px] font-mono font-extrabold px-2 py-1 rounded text-center animate-bounce shadow-lg">
+                        🚨 EMERGENCY: FALL CONFIRMED
+                      </div>
+                    )}
+
+                    {/* Possible Fall Warning Banner */}
+                    {isFallPossible && (
+                      <div className="bg-amber-600/95 border border-amber-400 text-white text-[10px] font-mono font-extrabold px-2 py-1 rounded text-center animate-pulse shadow-lg">
+                        ⚠ CAUTION: POSSIBLE FALL
                       </div>
                     )}
 
