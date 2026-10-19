@@ -192,12 +192,20 @@ export default function Dashboard({
   const stopWebcam = React.useCallback(() => {
     if (streamRef.current) {
       try {
-        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current.getTracks().forEach(t => {
+          try {
+            t.enabled = false;
+            t.stop();
+          } catch (_) {}
+        });
       } catch (_) {}
       streamRef.current = null;
     }
     if (videoRef.current) {
-      videoRef.current.srcObject = null;
+      try {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+      } catch (_) {}
     }
     setWebcamActive(false);
   }, []);
@@ -325,8 +333,15 @@ export default function Dashboard({
   }, [dismissCameraError, isPythonConnected, onToggleCamera, webcamActive, stopWebcam, toggleWebcam]);
 
   useEffect(() => {
+    const handleUnload = () => {
+      stopWebcam();
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
     return () => {
       stopWebcam();
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
     };
   }, [stopWebcam]);
 

@@ -238,6 +238,10 @@ class CameraReader:
                 self.cap.release()
             except Exception:
                 pass
+            try:
+                del self.cap
+            except Exception:
+                pass
             self.cap = None
 
         with self.lock:
