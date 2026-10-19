@@ -135,6 +135,7 @@ class VideoProcessor:
         self.active_demo_scenario: Optional[Dict[str, Any]] = None
         self.is_running = True
         self._loop = None
+        self._active_uploads: Dict[str, Any] = {}
 
         # Resolved source configuration
         self.source_mode, self.source_label, self.resolved_source = resolve_source_config(source, use_camera)
@@ -188,10 +189,10 @@ class VideoProcessor:
             pass
 
     def open_camera(self, device_id: Optional[Any] = None) -> bool:
-        """Acquires physical camera hardware device or CCTV stream via dedicated CameraReader thread."""
+        """Acquires physical camera hardware device, CCTV stream, or demo video file via dedicated CameraReader thread."""
         self.release_camera()
         dev = device_id if device_id is not None else (
-            self.resolved_source if (isinstance(self.resolved_source, int) or (isinstance(self.resolved_source, str) and self.resolved_source.startswith(("rtsp://", "http")))) else 0
+            self.resolved_source if (isinstance(self.resolved_source, int) or (isinstance(self.resolved_source, str) and (self.resolved_source.startswith(("rtsp://", "http")) or os.path.isfile(self.resolved_source)))) else 0
         )
 
         self.camera_reader = CameraReader(source=dev, target_fps=30.0)
@@ -199,9 +200,19 @@ class VideoProcessor:
         if success:
             self.is_camera_open = True
             is_cctv = isinstance(dev, str) and (dev.startswith("rtsp://") or dev.startswith("http"))
-            self.source_mode = "CCTV_AI" if is_cctv else "LIVE_AI"
+            is_video_file = isinstance(dev, str) and not is_cctv and (dev.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')) or os.path.isfile(dev))
+
+            if is_cctv:
+                self.source_mode = "CCTV_AI"
+                self.source_label = f"IP CCTV Stream ({dev})"
+            elif is_video_file:
+                self.source_mode = "VIDEO_AI"
+                self.source_label = f"Demo Video ({os.path.basename(dev)})"
+            else:
+                self.source_mode = "LIVE_AI"
+                self.source_label = f"Physical Webcam (Device {dev})"
+
             self.active_source = self.source_mode
-            self.source_label = f"IP CCTV Stream ({dev})" if is_cctv else f"Physical Webcam (Device {dev})"
             print(f"[VideoProcessor] Camera reader started for source '{dev}'. State: RUNNING.")
             self._notify_camera_status(True)
             return True
@@ -271,6 +282,64 @@ class VideoProcessor:
             src = data.get("source")
             if src is not None:
                 self.switch_source(src)
+        elif cmd == "UPLOAD_VIDEO":
+            filename = data.get("filename", f"demo_{int(time.time())}.mp4")
+            b64_data = data.get("file_data", "")
+            if b64_data:
+                try:
+                    if "," in b64_data:
+                        b64_data = b64_data.split(",", 1)[1]
+                    raw_bytes = base64.b64decode(b64_data)
+                    uploads_dir = os.path.join(PROJECT_ROOT, "uploads")
+                    os.makedirs(uploads_dir, exist_ok=True)
+                    safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ")
+                    if not safe_name:
+                        safe_name = f"demo_{int(time.time())}.mp4"
+                    saved_path = os.path.join(uploads_dir, safe_name)
+                    with open(saved_path, "wb") as f:
+                        f.write(raw_bytes)
+                    print(f"[VideoProcessor] Demo video uploaded successfully: {saved_path} ({len(raw_bytes)} bytes)")
+                    self.switch_source(saved_path)
+                except Exception as ex:
+                    print(f"[VideoProcessor] Failed to save uploaded video: {ex}")
+        elif cmd == "UPLOAD_VIDEO_CHUNK":
+            upload_id = data.get("upload_id", "default")
+            chunk_idx = data.get("chunk_idx", 0)
+            total_chunks = data.get("total_chunks", 1)
+            filename = data.get("filename", f"demo_{int(time.time())}.mp4")
+            chunk_b64 = data.get("chunk_data", "")
+
+            if upload_id not in self._active_uploads:
+                self._active_uploads[upload_id] = {
+                    "filename": filename,
+                    "chunks": {},
+                    "total_chunks": total_chunks,
+                    "started_at": time.time()
+                }
+
+            try:
+                if "," in chunk_b64:
+                    chunk_b64 = chunk_b64.split(",", 1)[1]
+                self._active_uploads[upload_id]["chunks"][chunk_idx] = base64.b64decode(chunk_b64)
+            except Exception as e:
+                print(f"[VideoProcessor] Failed to decode chunk {chunk_idx}: {e}")
+
+            if len(self._active_uploads[upload_id]["chunks"]) == total_chunks:
+                upload_info = self._active_uploads.pop(upload_id)
+                uploads_dir = os.path.join(PROJECT_ROOT, "uploads")
+                os.makedirs(uploads_dir, exist_ok=True)
+                safe_name = "".join(c for c in upload_info["filename"] if c.isalnum() or c in "._- ")
+                if not safe_name:
+                    safe_name = f"demo_{int(time.time())}.mp4"
+                saved_path = os.path.join(uploads_dir, safe_name)
+                try:
+                    with open(saved_path, "wb") as f:
+                        for i in range(total_chunks):
+                            f.write(upload_info["chunks"].get(i, b""))
+                    print(f"[VideoProcessor] Demo video assembled from {total_chunks} chunks: {saved_path}")
+                    self.switch_source(saved_path)
+                except Exception as ex:
+                    print(f"[VideoProcessor] Failed to write assembled video: {ex}")
         elif cmd == "MODE_LIVE":
             self.mode = "LIVE"
             self.active_demo_scenario = None

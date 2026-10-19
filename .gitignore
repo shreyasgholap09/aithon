@@ -40,6 +40,11 @@ yarn-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Dynamic uploads (preserve sample test video)
+uploads/*
+!uploads/sample_safety_demo.mp4
+!uploads/.gitkeep
 *.swp
 *.swo
 scratch/

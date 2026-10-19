@@ -17,6 +17,7 @@ export default function App() {
     privacyMode,
     setPrivacyMode,
     setVideoSource,
+    uploadVideo,
     setLiveMode,
     latestEvent,
     liveFrame,
@@ -76,6 +77,7 @@ export default function App() {
                     privacyMode={privacyMode}
                     onSetPrivacyMode={setPrivacyMode}
                     onSetVideoSource={setVideoSource}
+                    onUploadVideo={uploadVideo}
                     onTriggerScenario={triggerScenario}
                     onSetLiveMode={setLiveMode}
                     onDismissAlert={dismissAlert}

@@ -167,15 +167,35 @@ class CameraReader:
 
     def _capture_loop(self):
         """Continuously reads frames and stores the latest into the buffer."""
+        is_video_file = isinstance(self.source, str) and not self.source.isdigit() and not (self.source.startswith("rtsp://") or self.source.startswith("http"))
+        file_fps = self.target_fps
+        if is_video_file and self.cap is not None:
+            try:
+                det_fps = self.cap.get(self._cv2.CAP_PROP_FPS)
+                if det_fps and 1.0 <= det_fps <= 120.0:
+                    file_fps = det_fps
+            except Exception:
+                pass
+
+        frame_interval = 1.0 / max(1.0, file_fps)
         sleep_interval = 1.0 / max(1.0, self.target_fps)
         consecutive_read_failures = 0
+        t_last_frame = time.perf_counter()
 
         while self.running and self.cap is not None:
+            if is_video_file:
+                # Pace to native video file framerate
+                t_target = t_last_frame + frame_interval
+                wait_time = t_target - time.perf_counter()
+                if wait_time > 0.002:
+                    time.sleep(wait_time)
+                t_last_frame = time.perf_counter()
+
             ret, frame = self.cap.read()
             if not ret or frame is None:
                 consecutive_read_failures += 1
                 # Video file reached end -> Loop seamlessly
-                if isinstance(self.source, str) and not self.source.isdigit() and not (self.source.startswith("rtsp://") or self.source.startswith("http")):
+                if is_video_file:
                     try:
                         self.cap.set(self._cv2.CAP_PROP_POS_FRAMES, 0)
                         ret, frame = self.cap.read()
@@ -208,7 +228,8 @@ class CameraReader:
                 self._frame_counter = 0
                 self._last_fps_calc_time = now
 
-            time.sleep(max(0.001, sleep_interval * 0.4))
+            if not is_video_file:
+                time.sleep(max(0.001, sleep_interval * 0.4))
 
     def get_latest_frame(self) -> Tuple[Optional[np.ndarray], float, int]:
         """Thread-safe retrieval of latest frame."""

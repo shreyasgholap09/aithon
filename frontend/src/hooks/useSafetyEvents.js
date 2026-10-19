@@ -424,6 +424,49 @@ export function useSafetyEvents() {
     }
   }, []);
 
+  // Upload demo video from device's local storage for testing
+  const uploadVideo = useCallback(async (file, onProgress) => {
+    if (!file) return false;
+
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.warn('[ErgoGuard] WebSocket not connected; video file will play in local preview mode.');
+      return false;
+    }
+
+    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(file.size, start + CHUNK_SIZE);
+      const blobSlice = file.slice(start, end);
+
+      const buffer = await blobSlice.arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const len = bytes.byteLength;
+      for (let b = 0; b < len; b++) {
+        binary += String.fromCharCode(bytes[b]);
+      }
+      const chunkB64 = window.btoa(binary);
+
+      wsRef.current.send(JSON.stringify({
+        command: 'UPLOAD_VIDEO_CHUNK',
+        upload_id: uploadId,
+        filename: file.name,
+        chunk_idx: i,
+        total_chunks: totalChunks,
+        chunk_data: chunkB64
+      }));
+
+      if (onProgress) {
+        onProgress(Math.round(((i + 1) / totalChunks) * 100));
+      }
+    }
+    return true;
+  }, []);
+
   const clearAlerts = useCallback(() => {
     setActiveAlerts([]);
   }, []);
@@ -437,6 +480,7 @@ export function useSafetyEvents() {
     privacyMode,
     setPrivacyMode,
     setVideoSource,
+    uploadVideo,
     setLiveMode,
     latestEvent,
     liveFrame,

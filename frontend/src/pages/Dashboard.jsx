@@ -21,7 +21,8 @@ import {
   EyeOff,
   Globe,
   Tv,
-  Lock
+  Lock,
+  Upload
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import AlertCard from '../components/AlertCard';
@@ -123,6 +124,7 @@ export default function Dashboard({
   privacyMode = 'OFF',
   onSetPrivacyMode,
   onSetVideoSource,
+  onUploadVideo,
   onTriggerScenario, 
   onSetLiveMode,
   onDismissAlert, 
@@ -133,6 +135,11 @@ export default function Dashboard({
   const [cameraError, setCameraError] = useState(null);
   const [cctvUrl, setCctvUrl] = useState('');
   const [showCctvInput, setShowCctvInput] = useState(false);
+  const fileInputRef = useRef(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadedVideoName, setUploadedVideoName] = useState(null);
+  const [localVideoUrl, setLocalVideoUrl] = useState(null);
   const effectiveCameraError = backendCameraError || cameraError;
   const dismissCameraError = React.useCallback(() => {
     setCameraError(null);
@@ -331,6 +338,65 @@ export default function Dashboard({
       await toggleWebcam();
     }
   }, [dismissCameraError, isPythonConnected, onToggleCamera, webcamActive, stopWebcam, toggleWebcam]);
+
+  // Demo Video Upload handler from device storage
+  const handleVideoFileUpload = React.useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    dismissCameraError();
+    stopWebcam();
+
+    if (localVideoUrl) {
+      URL.revokeObjectURL(localVideoUrl);
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    setLocalVideoUrl(objectUrl);
+    setUploadedVideoName(file.name);
+
+    if (onUploadVideo && isPythonConnected) {
+      setIsUploading(true);
+      setUploadProgress(0);
+      try {
+        const ok = await onUploadVideo(file, (progress) => {
+          setUploadProgress(progress);
+        });
+        if (ok) {
+          console.log('[Dashboard] Video file uploaded to Python AI pipeline:', file.name);
+        }
+      } catch (err) {
+        console.error('[Dashboard] Video upload failed:', err);
+      } finally {
+        setIsUploading(false);
+      }
+    } else {
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+        videoRef.current.src = objectUrl;
+        videoRef.current.loop = true;
+        videoRef.current.play().catch(pErr => console.warn('[Dashboard] Local video play deferred:', pErr));
+      }
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [dismissCameraError, stopWebcam, localVideoUrl, onUploadVideo, isPythonConnected]);
+
+  const handleEjectVideo = React.useCallback(() => {
+    if (localVideoUrl) {
+      URL.revokeObjectURL(localVideoUrl);
+      setLocalVideoUrl(null);
+    }
+    setUploadedVideoName(null);
+    if (videoRef.current) {
+      videoRef.current.src = '';
+      videoRef.current.srcObject = null;
+    }
+    if (onSetVideoSource) {
+      onSetVideoSource(0);
+    }
+  }, [localVideoUrl, onSetVideoSource]);
 
   useEffect(() => {
     const handleUnload = () => {
@@ -545,6 +611,32 @@ export default function Dashboard({
                     Browser Camera Active
                   </span>
                 )}
+                {/* Upload Demo Video File Button */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/ogg,video/quicktime,video/x-msvideo,video/*"
+                  className="hidden"
+                  onChange={handleVideoFileUpload}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className={`text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition ${
+                    uploadedVideoName
+                      ? 'bg-purple-600/25 text-purple-300 border border-purple-500/50 hover:bg-purple-600/35'
+                      : 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-600/30'
+                  }`}
+                  title="Upload MP4/WebM/AVI demo video from device storage for safety & fall testing"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>
+                    {isUploading 
+                      ? `Uploading ${uploadProgress}%...` 
+                      : (uploadedVideoName ? `Video: ${uploadedVideoName.slice(0, 16)}` : 'Upload Demo Video')}
+                  </span>
+                </button>
+
                 <button
                   onClick={handleCameraToggle}
                   className={`text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition ${
@@ -684,18 +776,19 @@ export default function Dashboard({
 
             {/* Video Viewport with AI HUD Overlays */}
             <div className="relative w-full aspect-video bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center overflow-hidden">
-              {/* Background grid canvas when no camera is active */}
-              {!webcamActive && !liveFrame && (
+              {/* Background grid canvas when no camera or video is active */}
+              {!webcamActive && !liveFrame && !localVideoUrl && (
                 <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:3rem_3rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] opacity-30 pointer-events-none" />
               )}
 
-              {/* Browser Web Camera Native Video Stream */}
+              {/* Browser Web Camera Native Video Stream or Local Uploaded Video */}
               <video
                 ref={videoRef}
                 playsInline
                 muted
                 autoPlay
-                className={`absolute inset-0 w-full h-full object-cover ${webcamActive ? 'block' : 'hidden'}`}
+                loop
+                className={`absolute inset-0 w-full h-full object-cover ${(webcamActive || (localVideoUrl && !liveFrame)) ? 'block' : 'hidden'}`}
               />
 
               {/* Live Computer Vision Stream from Python Backend */}
@@ -707,8 +800,28 @@ export default function Dashboard({
                 />
               )}
 
+              {/* Uploaded Demo Video Active Overlay Badge */}
+              {uploadedVideoName && (
+                <div className="absolute top-3 left-3 z-30 px-3 py-1.5 rounded-xl bg-slate-950/90 border border-purple-500/50 backdrop-blur-md flex items-center gap-2 shadow-lg">
+                  <FileVideo className="w-4 h-4 text-purple-400 animate-pulse" />
+                  <span className="text-xs font-mono text-purple-300 font-semibold truncate max-w-[200px] sm:max-w-[320px]">
+                    Demo Video: {uploadedVideoName}
+                  </span>
+                  <span className="text-[11px] text-purple-200/80 hidden md:inline">
+                    • {liveFrame ? 'Python AI Vision Active' : 'Local Video Active'}
+                  </span>
+                  <button
+                    onClick={handleEjectVideo}
+                    className="ml-1 text-slate-400 hover:text-white transition p-0.5 rounded hover:bg-purple-900/40"
+                    title="Eject Demo Video"
+                  >
+                    <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                  </button>
+                </div>
+              )}
+
               {/* Local Browser Webcam Active Overlay Badge */}
-              {webcamActive && (
+              {webcamActive && !uploadedVideoName && (
                 <div className="absolute top-3 left-3 z-30 px-3 py-1.5 rounded-xl bg-slate-950/85 border border-cyan-500/40 backdrop-blur-md flex items-center gap-2 shadow-lg">
                   <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
                   <span className="text-xs font-mono text-cyan-300 font-semibold">Browser Camera Preview Active</span>
@@ -843,8 +956,8 @@ export default function Dashboard({
                 );
               })}
 
-              {/* Standby Card when camera is OFF and no demo scenario is active */}
-              {!webcamActive && !liveFrame && !effectiveCameraError && operatingMode === 'LIVE' && effectiveWorkers.length === 0 && (
+              {/* Standby Card when camera is OFF and no demo scenario or video is active */}
+              {!webcamActive && !liveFrame && !localVideoUrl && !effectiveCameraError && operatingMode === 'LIVE' && effectiveWorkers.length === 0 && (
                 <div className="z-20 text-center p-6 rounded-2xl bg-slate-900/80 border border-slate-800 backdrop-blur-md max-w-md shadow-2xl">
                   <div className="w-12 h-12 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-center mx-auto mb-3 text-slate-400">
                     <Camera className="w-6 h-6 text-emerald-400" />
@@ -852,8 +965,8 @@ export default function Dashboard({
                   <p className="text-sm font-bold text-white">Camera Standby</p>
                   <p className="text-xs text-slate-400 mt-1 mb-4 leading-relaxed">
                     {isPythonConnected 
-                      ? 'Python AI engine connected on ws://127.0.0.1:8765. Click "Turn Camera On" to begin live AI monitoring.'
-                      : 'Click "Turn Camera On" to enable your webcam, or run python main.py for full AI inference.'}
+                      ? 'Python AI engine connected on ws://127.0.0.1:8765. Click "Turn Camera On" to begin live monitoring, or upload a test video from your device.'
+                      : 'Click "Turn Camera On" to enable your webcam, upload a demo video from your device, or run python main.py for full AI inference.'}
                   </p>
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     <button
@@ -862,6 +975,14 @@ export default function Dashboard({
                     >
                       <Camera className="w-3.5 h-3.5" />
                       Turn Camera On
+                    </button>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-xs px-3.5 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/40 text-indigo-200 font-medium flex items-center gap-1.5 transition border border-indigo-500/40 shadow-lg shadow-indigo-950/30"
+                      title="Upload MP4/WebM video from device storage to test fall detection & PPE compliance"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-indigo-300" />
+                      Upload Demo Video
                     </button>
                     <button
                       onClick={toggleWebcam}
