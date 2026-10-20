@@ -8,7 +8,8 @@ import urllib.request
 
 MODELS = {
     "yolov8n.onnx": "https://huggingface.co/Xuban/yolo_weights_database/resolve/main/yolov8n.onnx",
-    "ppe_yolov8.onnx": "https://huggingface.co/ayushgupta7777/safetyvision-yolov8/resolve/main/best.onnx"
+    "ppe_yolov8.onnx": "https://huggingface.co/ayushgupta7777/safetyvision-yolov8/resolve/main/best.onnx",
+    "pose_landmarker_lite.task": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
 }
 
 def download_models():

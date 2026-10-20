@@ -356,8 +356,8 @@ class VideoProcessor:
             self.active_source = self.source_mode
             print("[VideoProcessor] Alert manager reset. Operating in LIVE mode.")
 
-    def _draw_scene_overlay(self, frame, detections, cv2):
-        """Draws danger zone, worker boxes, tracker IDs, and safety status badges on frame."""
+    def _draw_scene_overlay(self, frame, detections, cv2, ppe_detections: Optional[List[Dict[str, Any]]] = None):
+        """Draws danger zone, worker boxes, tracker IDs, safety tools, and safety status badges on frame."""
         h, w = frame.shape[:2]
 
         # 1. Draw Configured Polygonal Danger Zones
@@ -382,9 +382,38 @@ class VideoProcessor:
                 cv2.putText(frame, z_title.upper(), (label_x, label_y),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.48, color_tuple, 2)
 
+        # 1.5 Draw Detected Safety Tools & Equipment BBoxes
+        if ppe_detections:
+            for ppe_item in ppe_detections:
+                pbox = ppe_item.get("bbox")
+                if not pbox or len(pbox) < 4:
+                    continue
+                px, py, pw, ph = pbox
+                c_name = ppe_item.get("class_name", "")
+                p_conf = int(ppe_item.get("confidence", 0.0) * 100)
+
+                if "Hardhat" in c_name:
+                    tool_color = (0, 230, 0) if c_name == "Hardhat" else (0, 0, 255)
+                elif "Vest" in c_name:
+                    tool_color = (0, 255, 255) if c_name == "Safety Vest" else (0, 0, 255)
+                elif "Gloves" in c_name:
+                    tool_color = (255, 200, 0) if c_name == "Gloves" else (0, 80, 255)
+                elif "Goggles" in c_name:
+                    tool_color = (255, 150, 50) if c_name == "Goggles" else (0, 80, 255)
+                elif c_name == "Person":
+                    continue  # drawn as worker box
+                else:
+                    tool_color = (200, 200, 200)
+
+                cv2.rectangle(frame, (px, py), (px + pw, py + ph), tool_color, 1)
+                tool_lbl = f"{c_name} {p_conf}%"
+                (lw, lh), _ = cv2.getTextSize(tool_lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+                cv2.rectangle(frame, (px, max(0, py - 16)), (px + lw + 4, py), tool_color, -1)
+                cv2.putText(frame, tool_lbl, (px + 2, py - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 0, 0), 1)
+
         # 2. Draw Detected Workers
         for det in detections:
-            bx, by, bw, bh = det["bbox"]
+            bx, by, bw, bh = det.get("orig_bbox", det["bbox"])
             risk_level = det.get("risk_level", "SAFE")
             fall = det.get("fall_status", "NONE")
 
@@ -637,7 +666,7 @@ class VideoProcessor:
                     display_frame = None
                     if self.cv2 is not None and frame is not None:
                         display_frame = self.privacy_filter.apply(frame.copy(), [])
-                        self._draw_scene_overlay(display_frame, [], self.cv2)
+                        self._draw_scene_overlay(display_frame, [], self.cv2, ppe_detections=self.detector._cached_ppe)
                         t_enc0 = time.perf_counter()
                         scaled = self.cv2.resize(display_frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
                         _, buf = self.cv2.imencode('.jpg', scaled, [int(self.cv2.IMWRITE_JPEG_QUALITY), 55])
@@ -684,6 +713,10 @@ class VideoProcessor:
                     await self.event_sender.broadcast_telemetry(empty_telemetry)
 
                 else:
+                    fh, fw = frame.shape[:2]
+                    scale_x = 640.0 / fw if fw > 0 else 1.0
+                    scale_y = 360.0 / fh if fh > 0 else 1.0
+
                     for det in live_detections:
                         w_id = det["worker_id"]
                         visible_worker_ids.add(w_id)
@@ -699,7 +732,9 @@ class VideoProcessor:
                             source=current_effective_source,
                             is_observed=True
                         )
-                        event["bbox"] = det["bbox"]
+                        bx, by, bw, bh = det["bbox"]
+                        event["orig_bbox"] = det["bbox"]
+                        event["bbox"] = (int(bx * scale_x), int(by * scale_y), int(bw * scale_x), int(bh * scale_y))
                         analyzed_workers.append(event)
 
                         # Broadcast newly confirmed incident records
@@ -735,7 +770,7 @@ class VideoProcessor:
                     display_frame = None
                     if self.cv2 is not None and frame is not None:
                         display_frame = self.privacy_filter.apply(frame.copy(), analyzed_workers)
-                        self._draw_scene_overlay(display_frame, analyzed_workers, self.cv2)
+                        self._draw_scene_overlay(display_frame, analyzed_workers, self.cv2, ppe_detections=self.detector._cached_ppe)
                         t_enc0 = time.perf_counter()
                         scaled = self.cv2.resize(display_frame, (640, 360), interpolation=self.cv2.INTER_LINEAR)
                         _, buf = self.cv2.imencode('.jpg', scaled, [int(self.cv2.IMWRITE_JPEG_QUALITY), 55])

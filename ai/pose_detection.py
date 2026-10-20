@@ -12,6 +12,7 @@ not for medical or clinical diagnostic evaluation.
 
 from typing import Tuple, Optional, Dict, Any, Union, List
 import math
+import os
 from ai.geometry import (
     calculate_angle_3points,
     calculate_angle_with_vertical,
@@ -54,21 +55,53 @@ class PoseDetector:
         # Temporal smoothing history per worker: worker_id -> smoothed_spine_angle
         self._smoothed_angles: Dict[str, float] = {}
 
-        # Optional MediaPipe Pose Estimator
+        # MediaPipe Pose Estimator
         self.mp_pose = None
+        self.pose_landmarker = None
         self.has_mediapipe = False
+        self._cv2 = None
+        self._mp = None
+        self._last_frame_id = None
+        self._cached_frame_poses: List[Any] = []
+
         try:
+            import cv2
+            self._cv2 = cv2
             import mediapipe as mp
-            self.mp_pose = mp.solutions.pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,
-                smooth_landmarks=True,
-                min_detection_confidence=0.45,
-                min_tracking_confidence=0.45
-            )
-            self.has_mediapipe = True
-            print("[PoseDetector] MediaPipe Pose module initialized successfully.")
-        except Exception:
+            self._mp = mp
+
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            task_model_path = os.path.join(base_dir, "models", "pose_landmarker_lite.task")
+
+            # 1. Prefer modern MediaPipe Tasks PoseLandmarker (v0.10.x / v1.x+)
+            if os.path.exists(task_model_path):
+                from mediapipe.tasks import python as mp_python
+                from mediapipe.tasks.python import vision as mp_vision
+                base_options = mp_python.BaseOptions(model_asset_path=task_model_path)
+                options = mp_vision.PoseLandmarkerOptions(
+                    base_options=base_options,
+                    num_poses=5,
+                    min_pose_detection_confidence=0.35,
+                    min_tracking_confidence=0.35
+                )
+                self.pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
+                self.has_mediapipe = True
+                print(f"[PoseDetector] MediaPipe PoseLandmarker initialized from: {task_model_path}")
+            # 2. Fallback to legacy MediaPipe solutions.pose if present
+            elif hasattr(mp, "solutions") and hasattr(mp.solutions, "pose"):
+                self.mp_pose = mp.solutions.pose.Pose(
+                    static_image_mode=False,
+                    model_complexity=1,
+                    smooth_landmarks=True,
+                    min_detection_confidence=0.45,
+                    min_tracking_confidence=0.45
+                )
+                self.has_mediapipe = True
+                print("[PoseDetector] MediaPipe Pose module initialized successfully.")
+            else:
+                self.has_mediapipe = False
+        except Exception as e:
+            print(f"[PoseDetector] MediaPipe init note: {e}")
             self.has_mediapipe = False
 
     def detect_worker_pose(
@@ -86,7 +119,7 @@ class PoseDetector:
         If landmarks are missing or below confidence threshold, returns ('UNKNOWN', 0.0, 0.0, {}, None).
         Never classifies missing data as SAFE.
         """
-        if not self.has_mediapipe or self.mp_pose is None or frame is None:
+        if not self.has_mediapipe or (self.pose_landmarker is None and self.mp_pose is None) or frame is None:
             return "UNAVAILABLE", 0.0, 0.0, {}, None
 
         try:
@@ -97,20 +130,55 @@ class PoseDetector:
             x2 = max(x1 + 1, min(bx + bw, w))
             y2 = max(y1 + 1, min(by + bh, h))
 
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 20:
-                return "UNKNOWN", 0.0, 0.0, {}, None
+            # Approach A: Modern MediaPipe Tasks PoseLandmarker
+            if self.pose_landmarker is not None and self._mp is not None:
+                frame_key = (id(frame), getattr(frame, "shape", None))
+                if getattr(self, "_cached_frame_key", None) == frame_key:
+                    all_pose_lms = self._cached_frame_poses
+                else:
+                    rgb_frame = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
+                    mp_img = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb_frame)
+                    res = self.pose_landmarker.detect(mp_img)
+                    all_pose_lms = res.pose_landmarks if (res and res.pose_landmarks) else []
+                    self._cached_frame_key = frame_key
+                    self._cached_frame_poses = all_pose_lms
 
-            import cv2
-            rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            results = self.mp_pose.process(rgb_crop)
-            if results and results.pose_landmarks:
-                status, angle, conf, breakdown = self.analyze_landmarks(
-                    results.pose_landmarks,
-                    worker_id=worker_id,
-                    frame_shape=(y2 - y1, x2 - x1)
-                )
-                return status, angle, conf, breakdown, results.pose_landmarks
+                if all_pose_lms:
+                    best_match = None
+                    best_match_pts = 0
+                    for pose_lms in all_pose_lms:
+                        # Count keypoints that fall inside worker bbox expanded by 20%
+                        matched_in_box = 0
+                        for lm in pose_lms:
+                            px = lm.x * w
+                            py = lm.y * h
+                            if (x1 - bw * 0.20) <= px <= (x2 + bw * 0.20) and (y1 - bh * 0.15) <= py <= (y2 + bh * 0.15):
+                                matched_in_box += 1
+                        if matched_in_box > best_match_pts and matched_in_box >= 3:
+                            best_match_pts = matched_in_box
+                            best_match = pose_lms
+
+                    if best_match is not None:
+                        status, angle, conf, breakdown = self.analyze_landmarks(
+                            best_match,
+                            worker_id=worker_id,
+                            frame_shape=(h, w)
+                        )
+                        return status, angle, conf, breakdown, best_match
+
+            # Approach B: Legacy MediaPipe solutions.pose on crop
+            elif self.mp_pose is not None:
+                crop = frame[y1:y2, x1:x2]
+                if crop.size > 0 and crop.shape[0] >= 20 and crop.shape[1] >= 20:
+                    rgb_crop = self._cv2.cvtColor(crop, self._cv2.COLOR_BGR2RGB)
+                    results = self.mp_pose.process(rgb_crop)
+                    if results and results.pose_landmarks:
+                        status, angle, conf, breakdown = self.analyze_landmarks(
+                            results.pose_landmarks,
+                            worker_id=worker_id,
+                            frame_shape=(y2 - y1, x2 - x1)
+                        )
+                        return status, angle, conf, breakdown, results.pose_landmarks
         except Exception:
             pass
 

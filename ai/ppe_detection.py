@@ -20,7 +20,7 @@ PPE_CLASSES = [
 class PPEDetector:
     def __init__(
         self,
-        confidence_threshold: float = 0.35,
+        confidence_threshold: float = 0.30,
         nms_threshold: float = 0.45,
         confirmation_frames: int = 2,
         model_path: Optional[str] = None
@@ -84,15 +84,23 @@ class PPEDetector:
 
             for row in preds:
                 scores = row[4:]
-                idx = int(np.argmax(scores))
-                score = float(scores[idx])
-                if score >= self.confidence_threshold:
-                    cx, cy, bw, bh = row[0:4]
-                    x = int((cx - bw / 2.0) * x_factor)
-                    y = int((cy - bh / 2.0) * y_factor)
-                    boxes.append([x, y, int(bw * x_factor), int(bh * y_factor)])
-                    confidences.append(score)
-                    class_ids.append(idx)
+                for idx, score_val in enumerate(scores):
+                    s = float(score_val)
+                    if s >= self.confidence_threshold:
+                        cx, cy, bw, bh = row[0:4]
+                        x_raw = int((cx - bw / 2.0) * x_factor)
+                        y_raw = int((cy - bh / 2.0) * y_factor)
+                        bw_raw = int(bw * x_factor)
+                        bh_raw = int(bh * y_factor)
+
+                        x = max(0, min(x_raw, w - 1))
+                        y = max(0, min(y_raw, h - 1))
+                        box_w = max(8, min(bw_raw, w - x))
+                        box_h = max(8, min(bh_raw, h - y))
+
+                        boxes.append([x, y, box_w, box_h])
+                        confidences.append(s)
+                        class_ids.append(idx)
 
             if len(boxes) == 0:
                 return []
@@ -156,12 +164,12 @@ class PPEDetector:
             }, 0.0
 
         # Check if head is occluded or truncated by top edge of frame
-        head_occluded = wy < 5 or (worker_crop is not None and worker_crop.shape[0] < 35)
+        head_occluded = (wy < 0 and wh < 60) or (worker_crop is not None and worker_crop.shape[0] < 30)
 
-        head_top = wy - int(wh * 0.08)
-        head_bottom = wy + int(wh * 0.35)
-        torso_top = wy + int(wh * 0.18)
-        torso_bottom = wy + int(wh * 0.75)
+        head_top = wy - int(wh * 0.18)
+        head_bottom = wy + int(wh * 0.45)
+        torso_top = wy + int(wh * 0.15)
+        torso_bottom = wy + int(wh * 0.85)
 
         helmet_status = "UNKNOWN"
         helmet_conf = 0.0
@@ -170,6 +178,8 @@ class PPEDetector:
         vest_status = "UNKNOWN"
         vest_conf = 0.0
         vest_method = "none"
+
+        other_tools = {}
 
         # Check model detections overlapping worker ROI
         for det in frame_ppe_detections:
@@ -182,8 +192,9 @@ class PPEDetector:
             dcx = dx + dw // 2
             dcy = dy + dh // 2
 
-            # Spatial association: detection center must be inside worker horizontal span
-            if not (wx <= dcx <= wx + ww):
+            # Spatial association: detection center must be inside worker horizontal span (with margin)
+            horiz_margin = max(15, int(ww * 0.20))
+            if not ((wx - horiz_margin) <= dcx <= (wx + ww + horiz_margin)):
                 continue
 
             # Ensure detection belongs to this worker rather than a closer neighboring worker
@@ -227,57 +238,60 @@ class PPEDetector:
                         vest_conf = conf
                         vest_method = "model"
 
-        # Secondary heuristic color analysis: ONLY positive evidence indicator, never creates MISSING
+            # Track secondary protective equipment (gloves, goggles, mask)
+            if c_name in ("Gloves", "NO-Gloves", "Goggles", "NO-Goggles", "Mask", "NO-Mask"):
+                st = "PRESENT" if not c_name.startswith("NO-") else "MISSING"
+                item_name = c_name.replace("NO-", "").lower()
+                other_tools[item_name] = {"status": st, "confidence": conf}
+
+        # Secondary heuristic color analysis
         if worker_crop is not None and worker_crop.size > 0 and self._cv2 is not None:
             ch, cw = worker_crop.shape[:2]
-            if ch >= 35 and cw >= 20:
+            if ch >= 30 and cw >= 15:
                 try:
-                    # Head ROI color check (heuristic fallback only if model had no detection)
+                    # Head ROI color check (saturated yellow or orange hardhats)
                     if helmet_status == "UNKNOWN" and not head_occluded:
-                        head_roi = worker_crop[0:int(ch * 0.25), :]
+                        head_roi = worker_crop[0:int(ch * 0.30), :]
                         if head_roi.size > 0:
                             hsv_head = self._cv2.cvtColor(head_roi, self._cv2.COLOR_BGR2HSV)
                             yellow_orange = (
-                                self._cv2.inRange(hsv_head, np.array([16, 80, 80]), np.array([36, 255, 255])) |
-                                self._cv2.inRange(hsv_head, np.array([5, 110, 100]), np.array([17, 255, 255])) |
-                                self._cv2.inRange(hsv_head, np.array([0, 0, 185]), np.array([180, 45, 255]))
+                                self._cv2.inRange(hsv_head, np.array([16, 75, 75]), np.array([35, 255, 255])) |
+                                self._cv2.inRange(hsv_head, np.array([5, 110, 100]), np.array([17, 255, 255]))
                             )
                             coverage = np.sum(yellow_orange > 0) / float(head_roi.shape[0] * head_roi.shape[1] + 1e-5)
                             if coverage > 0.08:
                                 helmet_status = "PRESENT"
                                 helmet_conf = min(0.85, round(0.55 + coverage, 2))
                                 helmet_method = "heuristic_color"
-                            # If coverage <= 0.08, status remains UNKNOWN (never MISSING!)
 
-                    # Torso ROI color check (heuristic fallback only if model had no detection)
+                    # Torso ROI color check (fluorescent safety yellow or orange vests)
                     if vest_status == "UNKNOWN":
-                        torso_roi = worker_crop[int(ch * 0.20):int(ch * 0.65), :]
+                        torso_roi = worker_crop[int(ch * 0.18):int(ch * 0.70), :]
                         if torso_roi.size > 0:
                             hsv_torso = self._cv2.cvtColor(torso_roi, self._cv2.COLOR_BGR2HSV)
                             hi_vis = (
-                                self._cv2.inRange(hsv_torso, np.array([16, 90, 80]), np.array([36, 255, 255])) |
-                                self._cv2.inRange(hsv_torso, np.array([5, 120, 100]), np.array([17, 255, 255]))
+                                self._cv2.inRange(hsv_torso, np.array([16, 80, 70]), np.array([36, 255, 255])) |
+                                self._cv2.inRange(hsv_torso, np.array([5, 100, 90]), np.array([17, 255, 255]))
                             )
                             coverage_t = np.sum(hi_vis > 0) / float(torso_roi.shape[0] * torso_roi.shape[1] + 1e-5)
-                            if coverage_t > 0.12:
+                            if coverage_t > 0.10:
                                 vest_status = "PRESENT"
                                 vest_conf = min(0.85, round(0.55 + coverage_t, 2))
                                 vest_method = "heuristic_color"
-                            # If coverage_t <= 0.12, status remains UNKNOWN (never MISSING!)
+
+                    # If still UNKNOWN after checking model and color on genuine worker crop, report MISSING
+                    if helmet_status == "UNKNOWN" and not head_occluded:
+                        helmet_status = "MISSING"
+                        helmet_conf = 0.82
+                        helmet_method = "absence_inspection"
+
+                    if vest_status == "UNKNOWN":
+                        vest_status = "MISSING"
+                        vest_conf = 0.82
+                        vest_method = "absence_inspection"
 
                 except Exception:
                     pass
-
-        # If model is unavailable and no heuristic match was found, explicitly report capability as unavailable/unknown
-        if not self.model_loaded:
-            if helmet_method == "none":
-                helmet_status = "UNKNOWN"
-                helmet_conf = 0.0
-                helmet_method = "model_unavailable"
-            if vest_method == "none":
-                vest_status = "UNKNOWN"
-                vest_conf = 0.0
-                vest_method = "model_unavailable"
 
         # Temporal confirmation and hysteresis per tracked worker_id
         if worker_id is not None:
@@ -311,11 +325,22 @@ class PPEDetector:
             hist["last_helmet"] = helmet_status
             hist["last_vest"] = vest_status
 
+        # If model is unavailable and no heuristic match was found
+        if not self.model_loaded:
+            if helmet_method == "none":
+                helmet_status = "UNKNOWN"
+                helmet_conf = 0.0
+                helmet_method = "model_unavailable"
+            if vest_method == "none":
+                vest_status = "UNKNOWN"
+                vest_conf = 0.0
+                vest_method = "model_unavailable"
+
         # Calculate overall confidence
         valid_confs = [c for c in (helmet_conf, vest_conf) if c > 0.0]
         overall_conf = round(float(np.mean(valid_confs)), 2) if valid_confs else 0.0
 
-        return {
+        res_dict = {
             "helmet": {
                 "status": str(helmet_status),
                 "confidence": float(round(helmet_conf, 2)),
@@ -326,4 +351,8 @@ class PPEDetector:
                 "confidence": float(round(vest_conf, 2)),
                 "method": str(vest_method)
             }
-        }, float(overall_conf)
+        }
+        for k, v in other_tools.items():
+            res_dict[k] = v
+
+        return res_dict, float(overall_conf)

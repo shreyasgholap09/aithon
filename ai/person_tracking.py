@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
 
 class CentroidTracker:
-    def __init__(self, max_disappeared: int = 15, max_distance: float = 90.0):
+    def __init__(self, max_disappeared: int = 30, max_distance: float = 180.0):
         self.next_worker_id = 1
         self.objects: Dict[str, Tuple[int, int]] = {}  # worker_id -> (cx, cy)
         self.bboxes: Dict[str, Tuple[int, int, int, int]] = {}  # worker_id -> (x, y, w, h)
@@ -82,10 +82,13 @@ class CentroidTracker:
             for d, r, c in indexed_dists:
                 if r in used_rows or c in used_cols:
                     continue
-                if d > self.max_distance:
+                w_id = object_ids[r]
+                # Adaptive distance threshold based on worker scale
+                curr_box = self.bboxes.get(w_id, (0, 0, 100, 100))
+                max_allowed_dist = max(self.max_distance, max(curr_box[2], curr_box[3]) * 1.2)
+                if d > max_allowed_dist:
                     continue
 
-                w_id = object_ids[r]
                 self.objects[w_id] = input_centroids[c]
                 self.bboxes[w_id] = rects[c]
                 self.disappeared[w_id] = 0
@@ -122,10 +125,10 @@ class CentroidTracker:
         return results
 
 class PersonTracker:
-    def __init__(self, confidence_threshold: float = 0.35, nms_threshold: float = 0.45):
+    def __init__(self, confidence_threshold: float = 0.25, nms_threshold: float = 0.45):
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
-        self.tracker = CentroidTracker()
+        self.tracker = CentroidTracker(max_disappeared=30, max_distance=180.0)
         self.net = None
         self.model_loaded = False
         self._cv2 = None
@@ -188,13 +191,19 @@ class PersonTracker:
                     person_score = float(row[4 + person_class_idx])
                     if person_score >= self.confidence_threshold:
                         cx, cy, bw, bh = row[0:4]
-                        x = int((cx - bw / 2.0) * x_factor)
-                        y = int((cy - bh / 2.0) * y_factor)
-                        box_w = int(bw * x_factor)
-                        box_h = int(bh * y_factor)
+                        x_raw = int((cx - bw / 2.0) * x_factor)
+                        y_raw = int((cy - bh / 2.0) * y_factor)
+                        bw_raw = int(bw * x_factor)
+                        bh_raw = int(bh * y_factor)
+
+                        # Clamp coordinates to frame boundary
+                        x = max(0, min(x_raw, w - 1))
+                        y = max(0, min(y_raw, h - 1))
+                        box_w = max(10, min(bw_raw, w - x))
+                        box_h = max(20, min(bh_raw, h - y))
 
                         # Filter out degenerate boxes
-                        if box_w > 15 and box_h > 35:
+                        if box_w > 15 and box_h > 25:
                             boxes.append([x, y, box_w, box_h])
                             confidences.append(person_score)
 
@@ -214,7 +223,7 @@ class PersonTracker:
                 for tp in tracked:
                     # Match confidence
                     for i, fb in enumerate(filtered_boxes):
-                        if abs(fb[0] - tp["bbox"][0]) < 10 and abs(fb[1] - tp["bbox"][1]) < 10:
+                        if abs(fb[0] - tp["bbox"][0]) < 20 and abs(fb[1] - tp["bbox"][1]) < 20:
                             tp["confidence"] = round(filtered_confs[i], 2)
                             break
                 return tracked
